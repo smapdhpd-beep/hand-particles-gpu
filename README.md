@@ -1,10 +1,10 @@
 # hand-particles-gpu
 
-基于 GPU 的大规模手势控制粒子系统。26 万粒子在手中流动，支持 5 种力场预设。
+基于 GPU 的大规模手势控制粒子系统。6.5 万粒子在手中流动，支持 5 种力场预设。
 
 ## 功能亮点
 
-- **26 万 GPU 粒子**：512×512 纹理，Three.js GPUComputationRenderer 并行模拟
+- **6.5 万 GPU 粒子**：256×256 纹理，Three.js GPUComputationRenderer 并行模拟
 - **手势切换力场**：捏合/张开/数字 1/2/3 切换不同物理行为
 - **5 种力场预设**：引力奇点 / 涡旋 / 排斥 / 布朗运动 / 简谐震荡
 - **发光粒子渲染**：AdditiveBlending + 自定义 ShaderMaterial
