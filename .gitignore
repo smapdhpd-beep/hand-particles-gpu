@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 私人内容（本地保留，不上传）
+assets/debug/
+记忆/
+SKILL.md
+docs/*
+
+# 允许上传的文档
+!docs/01-项目概述.md
+!docs/07-使用手册.md
