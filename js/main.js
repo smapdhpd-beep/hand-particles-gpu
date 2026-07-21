@@ -36,6 +36,7 @@ let particleSystem;
 try {
   particleSystem = new GPUParticleSystem(renderer, STATE);
   scene.add(particleSystem.points);
+  console.log('GPUParticleSystem initialized:', particleSystem.count, 'particles');
 } catch (err) {
   console.error(err);
   document.getElementById('status').textContent = 'GPU 粒子系统初始化失败：' + err.message;

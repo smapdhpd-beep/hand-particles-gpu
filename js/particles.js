@@ -16,10 +16,14 @@ export class GPUParticleSystem {
 
     // 初始位置纹理
     const dtPosition = this.gpuCompute.createTexture();
+    dtPosition.minFilter = THREE.NearestFilter;
+    dtPosition.magFilter = THREE.NearestFilter;
     this.fillPosition(dtPosition);
 
     // 初始速度纹理
     const dtVelocity = this.gpuCompute.createTexture();
+    dtVelocity.minFilter = THREE.NearestFilter;
+    dtVelocity.magFilter = THREE.NearestFilter;
     this.fillVelocity(dtVelocity);
 
     // 位置更新 shader（GPUComputationRenderer 在 WebGL2 下使用 GLSL3，用 texture 而非 texture2D）
@@ -107,31 +111,31 @@ export class GPUParticleSystem {
       console.error('GPUComputationRenderer init error:', error);
     }
 
-    // 渲染用粒子几何体：每个顶点的 position 存储采样 UV
+    // 渲染用粒子几何体：position.xy 存储采样 UV，position.z = 0
     const geometry = new THREE.BufferGeometry();
-    const refs = new Float32Array(this.count * 2);
+    const positions = new Float32Array(this.count * 3);
     for (let i = 0; i < this.count; i++) {
-      refs[i * 2] = (i % this.width) / this.width;
-      refs[i * 2 + 1] = Math.floor(i / this.width) / this.height;
+      positions[i * 3]     = (i % this.width) / this.width + 0.5 / this.width;
+      positions[i * 3 + 1] = Math.floor(i / this.width) / this.height + 0.5 / this.height;
+      positions[i * 3 + 2] = 0.0;
     }
-    geometry.setAttribute('aReference', new THREE.BufferAttribute(refs, 2));
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
     const material = new THREE.ShaderMaterial({
       uniforms: {
         texturePosition: { value: null },
-        uColor: { value: new THREE.Color('#ff9a9e') },
-        uSize: { value: 1.5 },
+        uColor: { value: new THREE.Color('#ff6b9d') },
+        uSize: { value: 2.0 },
         uTime: { value: 0 },
       },
       vertexShader: `
-        attribute vec2 aReference;
         uniform sampler2D texturePosition;
         uniform float uSize;
         varying float vLife;
         void main() {
-          vec4 pos = texture2D(texturePosition, aReference);
+          vec4 pos = texture2D(texturePosition, position.xy);
           vec4 mvPosition = modelViewMatrix * vec4(pos.xyz, 1.0);
-          gl_PointSize = uSize * (300.0 / -mvPosition.z);
+          gl_PointSize = uSize * (400.0 / max(0.1, -mvPosition.z));
           gl_Position = projectionMatrix * mvPosition;
           vLife = pos.w;
         }
@@ -142,10 +146,10 @@ export class GPUParticleSystem {
         void main() {
           float d = distance(gl_PointCoord, vec2(0.5));
           if (d > 0.5) discard;
-          float core = 1.0 - smoothstep(0.0, 0.15, d);
-          float glow = 1.0 - smoothstep(0.0, 0.45, d);
-          float alpha = (core * 0.6 + glow * 0.25);
-          gl_FragColor = vec4(uColor * (1.0 + core * 0.3), alpha);
+          float core = 1.0 - smoothstep(0.0, 0.12, d);
+          float glow = 1.0 - smoothstep(0.0, 0.50, d);
+          float alpha = (core * 0.8 + glow * 0.35);
+          gl_FragColor = vec4(uColor * (1.0 + core * 0.5), alpha);
         }
       `,
       transparent: true,
@@ -161,15 +165,15 @@ export class GPUParticleSystem {
     const data = texture.image.data;
     for (let i = 0; i < this.count; i++) {
       const ix = i * 4;
-      // 球体内随机分布
       const r = Math.cbrt(Math.random()) * 2.0;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
       data[ix]   = r * Math.sin(phi) * Math.cos(theta);
       data[ix+1] = r * Math.sin(phi) * Math.sin(theta);
       data[ix+2] = r * Math.cos(phi);
-      data[ix+3] = Math.random(); // life/id
+      data[ix+3] = Math.random();
     }
+    texture.needsUpdate = true;
   }
 
   fillVelocity(texture) {
@@ -181,6 +185,7 @@ export class GPUParticleSystem {
       data[ix+2] = (Math.random() - 0.5) * 0.1;
       data[ix+3] = 0.0;
     }
+    texture.needsUpdate = true;
   }
 
   update(dt, time) {
@@ -189,7 +194,6 @@ export class GPUParticleSystem {
     const handY = this.state.handY || 0;
     const handZ = this.state.handDepth || 0;
 
-    // 先设置 uniforms，再执行 compute
     this.positionVariable.material.uniforms.uDelta.value = safeDt;
     this.velocityVariable.material.uniforms.uHandPos.value.set(handX, handY, handZ);
     this.velocityVariable.material.uniforms.uMode.value = this.state.forceMode || 0;
@@ -197,7 +201,12 @@ export class GPUParticleSystem {
 
     this.gpuCompute.compute();
 
-    this.points.material.uniforms.texturePosition.value = this.gpuCompute.getCurrentRenderTarget(this.positionVariable).texture;
+    const rt = this.gpuCompute.getCurrentRenderTarget(this.positionVariable);
+    if (!rt || !rt.texture) {
+      console.error('GPU compute render target is null');
+      return;
+    }
+    this.points.material.uniforms.texturePosition.value = rt.texture;
     this.points.material.uniforms.uTime.value = time;
   }
 }
