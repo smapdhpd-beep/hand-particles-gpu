@@ -22,13 +22,13 @@ export class GPUParticleSystem {
     const dtVelocity = this.gpuCompute.createTexture();
     this.fillVelocity(dtVelocity);
 
-    // 位置更新 shader
+    // 位置更新 shader（GPUComputationRenderer 在 WebGL2 下使用 GLSL3，用 texture 而非 texture2D）
     this.positionVariable = this.gpuCompute.addVariable('texturePosition', `
       uniform float uDelta;
       void main() {
         vec2 uv = gl_FragCoord.xy / resolution.xy;
-        vec4 pos = texture2D(texturePosition, uv);
-        vec4 vel = texture2D(textureVelocity, uv);
+        vec4 pos = texture(texturePosition, uv);
+        vec4 vel = texture(textureVelocity, uv);
         pos.xyz += vel.xyz * uDelta;
         gl_FragColor = pos;
       }
@@ -48,8 +48,8 @@ export class GPUParticleSystem {
 
       void main() {
         vec2 uv = gl_FragCoord.xy / resolution.xy;
-        vec4 pos = texture2D(texturePosition, uv);
-        vec4 vel = texture2D(textureVelocity, uv);
+        vec4 pos = texture(texturePosition, uv);
+        vec4 vel = texture(textureVelocity, uv);
 
         vec3 force = vec3(0.0);
         vec3 toHand = uHandPos - pos.xyz;
@@ -184,19 +184,18 @@ export class GPUParticleSystem {
   }
 
   update(dt, time) {
+    const safeDt = Math.max(dt, 0.001);
     const handX = this.state.handX || 0;
     const handY = this.state.handY || 0;
     const handZ = this.state.handDepth || 0;
 
+    // 先设置 uniforms，再执行 compute
+    this.positionVariable.material.uniforms.uDelta.value = safeDt;
+    this.velocityVariable.material.uniforms.uHandPos.value.set(handX, handY, handZ);
+    this.velocityVariable.material.uniforms.uMode.value = this.state.forceMode || 0;
+    this.velocityVariable.material.uniforms.uTime.value = time;
+
     this.gpuCompute.compute();
-
-    const positionUniforms = this.positionVariable.material.uniforms;
-    positionUniforms['uDelta'].value = dt;
-
-    const velocityUniforms = this.velocityVariable.material.uniforms;
-    velocityUniforms['uHandPos'].value.set(handX, handY, handZ);
-    velocityUniforms['uMode'].value = this.state.forceMode || 0;
-    velocityUniforms['uTime'].value = time;
 
     this.points.material.uniforms.texturePosition.value = this.gpuCompute.getCurrentRenderTarget(this.positionVariable).texture;
     this.points.material.uniforms.uTime.value = time;

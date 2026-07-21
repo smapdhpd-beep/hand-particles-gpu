@@ -27,8 +27,20 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);
 
-const particleSystem = new GPUParticleSystem(renderer, STATE);
-scene.add(particleSystem.points);
+if (!renderer.capabilities.isWebGL2) {
+  document.getElementById('status').textContent = '错误：需要 WebGL 2.0 支持';
+  throw new Error('WebGL 2.0 required');
+}
+
+let particleSystem;
+try {
+  particleSystem = new GPUParticleSystem(renderer, STATE);
+  scene.add(particleSystem.points);
+} catch (err) {
+  console.error(err);
+  document.getElementById('status').textContent = 'GPU 粒子系统初始化失败：' + err.message;
+  throw err;
+}
 
 const handTracker = new HandTracker((result) => {
   parseGesture(result, STATE);
