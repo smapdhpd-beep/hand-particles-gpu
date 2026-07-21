@@ -5,8 +5,8 @@ export class GPUParticleSystem {
   constructor(renderer, state) {
     this.state = state;
     this.renderer = renderer;
-    this.width = 512;
-    this.height = 512;
+    this.width = 256;
+    this.height = 256;
     this.count = this.width * this.height;
 
     this.gpuCompute = new GPUComputationRenderer(this.width, this.height, this.renderer);
@@ -24,7 +24,7 @@ export class GPUParticleSystem {
     const dtVelocity = this.gpuCompute.createTexture();
     dtVelocity.minFilter = THREE.NearestFilter;
     dtVelocity.magFilter = THREE.NearestFilter;
-    this.fillVelocity(dtVelocity);
+    this.fillVelocity(dtVelocity, dtPosition.image.data);
 
     // 位置更新 shader（GPUComputationRenderer 在 WebGL2 下使用 GLSL3，用 texture 而非 texture2D）
     this.positionVariable = this.gpuCompute.addVariable('texturePosition', `
@@ -60,17 +60,20 @@ export class GPUParticleSystem {
         float dist = length(toHand);
         vec3 dir = normalize(toHand + 0.001);
 
+        // 无手或手很远时，保持微弱漂移，避免全部塌缩到原点
+        float handInfluence = smoothstep(8.0, 2.0, dist);
+
         if (uMode < 0.5) {
           // 0: 引力奇点
-          force += dir / (dist * dist + 0.05) * 0.5;
+          force += dir / (dist * dist + 0.1) * 0.25;
         } else if (uMode < 1.5) {
           // 1: 涡旋
           vec3 tangent = normalize(cross(toHand, vec3(0.0, 0.0, 1.0)));
-          force += tangent / (dist + 0.1) * 0.8;
-          force += dir / (dist * dist + 0.2) * 0.2;
+          force += tangent / (dist + 0.2) * 0.4;
+          force += dir / (dist * dist + 0.5) * 0.05;
         } else if (uMode < 2.5) {
           // 2: 排斥
-          force -= dir / (dist * dist + 0.05) * 0.5;
+          force -= dir / (dist * dist + 0.1) * 0.25;
         } else if (uMode < 3.5) {
           // 3: 布朗运动
           vec3 noise = vec3(
@@ -78,22 +81,22 @@ export class GPUParticleSystem {
             rand(uv + uTime + 1.0),
             rand(uv + uTime + 2.0)
           ) * 2.0 - 1.0;
-          force += noise * 0.5;
-          force += dir / (dist * dist + 0.2) * 0.1;
+          force += noise * 0.15;
+          force += dir / (dist * dist + 0.5) * 0.03;
         } else {
           // 4: 简谐震荡
           float phase = rand(uv) * 6.28318;
-          force += vec3(cos(uTime * 2.0 + phase), sin(uTime * 2.0 + phase), 0.0) * 0.3;
-          force += dir / (dist * dist + 0.2) * 0.1;
+          force += vec3(cos(uTime * 1.5 + phase), sin(uTime * 1.5 + phase), 0.0) * 0.15;
+          force += dir / (dist * dist + 0.5) * 0.03;
         }
 
-        vel.xyz += force * 0.016;
-        vel.xyz *= 0.985; // 阻尼
+        vel.xyz += force * 0.016 * handInfluence;
+        vel.xyz *= 0.99; // 轻阻尼
 
-        // 边界软约束
+        // 边界软约束：保持粒子在可视球内
         float r = length(pos.xyz);
-        if (r > 4.0) {
-          vel.xyz -= normalize(pos.xyz) * (r - 4.0) * 0.02;
+        if (r > 5.0) {
+          vel.xyz -= normalize(pos.xyz) * (r - 5.0) * 0.01;
         }
 
         gl_FragColor = vel;
@@ -125,7 +128,7 @@ export class GPUParticleSystem {
       uniforms: {
         texturePosition: { value: null },
         uColor: { value: new THREE.Color('#ff6b9d') },
-        uSize: { value: 2.0 },
+        uSize: { value: 1.0 },
         uTime: { value: 0 },
       },
       vertexShader: `
@@ -135,7 +138,7 @@ export class GPUParticleSystem {
         void main() {
           vec4 pos = texture2D(texturePosition, position.xy);
           vec4 mvPosition = modelViewMatrix * vec4(pos.xyz, 1.0);
-          gl_PointSize = uSize * (400.0 / max(0.1, -mvPosition.z));
+          gl_PointSize = uSize * (30.0 / max(0.1, -mvPosition.z));
           gl_Position = projectionMatrix * mvPosition;
           vLife = pos.w;
         }
@@ -146,10 +149,10 @@ export class GPUParticleSystem {
         void main() {
           float d = distance(gl_PointCoord, vec2(0.5));
           if (d > 0.5) discard;
-          float core = 1.0 - smoothstep(0.0, 0.12, d);
+          float core = 1.0 - smoothstep(0.0, 0.25, d);
           float glow = 1.0 - smoothstep(0.0, 0.50, d);
-          float alpha = (core * 0.8 + glow * 0.35);
-          gl_FragColor = vec4(uColor * (1.0 + core * 0.5), alpha);
+          float alpha = (core * 0.4 + glow * 0.15);
+          gl_FragColor = vec4(uColor * (1.0 + core * 0.2), alpha);
         }
       `,
       transparent: true,
@@ -165,7 +168,8 @@ export class GPUParticleSystem {
     const data = texture.image.data;
     for (let i = 0; i < this.count; i++) {
       const ix = i * 4;
-      const r = Math.cbrt(Math.random()) * 2.0;
+      // 较大球体内随机分布
+      const r = Math.cbrt(Math.random()) * 3.5;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
       data[ix]   = r * Math.sin(phi) * Math.cos(theta);
@@ -176,12 +180,19 @@ export class GPUParticleSystem {
     texture.needsUpdate = true;
   }
 
-  fillVelocity(texture) {
+  fillVelocity(texture, positionData) {
     const data = texture.image.data;
     for (let i = 0; i < this.count; i++) {
       const ix = i * 4;
-      data[ix]   = (Math.random() - 0.5) * 0.1;
-      data[ix+1] = (Math.random() - 0.5) * 0.1;
+      const px = positionData[ix];
+      const py = positionData[ix+1];
+      const pz = positionData[ix+2];
+      // 切向速度：绕 z 轴
+      const len = Math.sqrt(px*px + py*py) || 1;
+      const tx = -py / len;
+      const ty = px / len;
+      data[ix]   = tx * 0.5 + (Math.random() - 0.5) * 0.1;
+      data[ix+1] = ty * 0.5 + (Math.random() - 0.5) * 0.1;
       data[ix+2] = (Math.random() - 0.5) * 0.1;
       data[ix+3] = 0.0;
     }
