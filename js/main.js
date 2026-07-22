@@ -133,7 +133,6 @@ function parseGesture(result, state) {
 
   // 捏合强度
   const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
-  const palmSize2d = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
   const pEnter = palmSize2d * 0.32;
   const pExit = palmSize2d * 0.52;
   state.pinchStrength = THREE.MathUtils.clamp((pExit - pinchDist) / (pExit - pEnter), 0, 1);
