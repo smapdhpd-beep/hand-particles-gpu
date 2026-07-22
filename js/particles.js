@@ -44,14 +44,14 @@ export class GPUParticleSystem {
 
         // 事件视界：被吞噬的粒子从远处重生，形成持续吸积流
         float holeDist = length(pos.xyz - uBlackHolePos);
-        float horizon = 0.18 * uBlackHoleStrength;
+        float horizon = 0.10 * uBlackHoleStrength;
         if (uBlackHoleStrength > 0.05 && holeDist < horizon) {
-          float r = 1.8 + rand(uv) * 2.2;
+          float r = 1.6 + rand(uv) * 2.4;
           float theta = rand(uv + 1.0) * 6.28318;
           float phi = acos(2.0 * rand(uv + 2.0) - 1.0);
           pos.x = uBlackHolePos.x + r * sin(phi) * cos(theta);
           pos.y = uBlackHolePos.y + r * sin(phi) * sin(theta);
-          pos.z = uBlackHolePos.z + r * cos(phi) * 0.35;
+          pos.z = uBlackHolePos.z + r * cos(phi) * 0.6;
           pos.w = rand(uv + 3.0); // 新生命周期种子
         }
 
@@ -116,7 +116,7 @@ export class GPUParticleSystem {
           force += dir / (dist * dist + 0.5) * 0.03;
         }
 
-        // 黑洞模式：柔和螺旋引力，粒子慢慢旋入暗区
+        // 黑洞模式：3D 螺旋坠入，避免形成二维稳定圆环
         if (uBlackHoleStrength > 0.001) {
           // 先削弱普通力场，让黑洞主导
           force *= (1.0 - uBlackHoleStrength * 0.85);
@@ -124,18 +124,22 @@ export class GPUParticleSystem {
           vec3 toHole = uBlackHolePos - pos.xyz;
           float holeDist = length(toHole);
           vec3 holeDir = normalize(toHole + 0.001);
-          vec3 holeTangent = normalize(cross(toHole, vec3(0.0, 0.0, 1.0)));
 
-          // 减弱的径向引力，避免粒子过度聚集成亮环
-          float pull = uBlackHoleStrength * 1.0 / (holeDist * holeDist + 0.2);
-          // 柔和的切向速度
-          float swirl = uBlackHoleStrength * 0.5 / (holeDist + 0.3);
-          // 轻微压扁成盘
-          float diskFlatten = -holeDir.z * uBlackHoleStrength * 0.4;
+          // 较强径向引力主导：粒子从四面八方螺旋坠入，而非在固定半径盘旋
+          float pull = uBlackHoleStrength * 1.6 / (holeDist * holeDist + 0.15);
+          // 极弱切向分量：仅保留轻微旋转感，避免形成硬质圆环
+          vec3 holeTangent = normalize(cross(toHole, vec3(0.0, 0.0, 1.0)));
+          float swirl = uBlackHoleStrength * 0.2 / (holeDist + 0.4);
+          // 3D 湍动：打破盘面对称，增加空间厚度
+          vec3 turbulence = vec3(
+            rand(uv + uTime) - 0.5,
+            rand(uv + uTime + 1.0) - 0.5,
+            rand(uv + uTime + 2.0) - 0.5
+          ) * uBlackHoleStrength * 0.35;
 
           force += holeDir * pull;
           force += holeTangent * swirl;
-          force += vec3(0.0, 0.0, diskFlatten);
+          force += turbulence;
         }
 
         vel.xyz += force * 0.016 * handInfluence;
@@ -179,7 +183,7 @@ export class GPUParticleSystem {
       uniforms: {
         texturePosition: { value: null },
         textureVelocity: { value: null },
-        uColor: { value: new THREE.Color('#b0607a') },
+        uColor: { value: new THREE.Color('#c86f8a') },
         uSize: { value: 1.0 },
         uTime: { value: 0 },
         uBlackHolePos: { value: new THREE.Vector3() },
@@ -190,13 +194,15 @@ export class GPUParticleSystem {
         uniform sampler2D textureVelocity;
         uniform float uSize;
         varying vec3 vWorldPos;
+        varying float vDepth;
         void main() {
           vec4 pos = texture2D(texturePosition, position.xy);
           vec4 mvPosition = modelViewMatrix * vec4(pos.xyz, 1.0);
-          // 固定小尺寸，不随速度变化，避免高速粒子过曝
-          gl_PointSize = min(uSize * (20.0 / max(0.1, -mvPosition.z)), 5.0);
+          // 固定尺寸，不随速度变化；上限稍大确保默认状态可见
+          gl_PointSize = min(uSize * (24.0 / max(0.1, -mvPosition.z)), 7.0);
           gl_Position = projectionMatrix * mvPosition;
           vWorldPos = pos.xyz;
+          vDepth = -mvPosition.z;
         }
       `,
       fragmentShader: `
@@ -204,20 +210,25 @@ export class GPUParticleSystem {
         uniform vec3 uBlackHolePos;
         uniform float uBlackHoleStrength;
         varying vec3 vWorldPos;
+        varying float vDepth;
         void main() {
           vec2 uv = gl_PointCoord - 0.5;
           float d = length(uv);
           if (d > 0.5) discard;
 
-          // 柔和软边圆点，无发光提亮
+          // 柔和软边圆点，基础亮度提高
           float alpha = 1.0 - smoothstep(0.0, 0.5, d);
-          vec3 col = uColor * 0.55;
+          vec3 col = uColor * 0.85;
 
-          // 黑洞暗化：粒子越接近中心越暗、越透明，形成真正的黑色空洞
+          // 深度衰减：远处粒子更淡，增强空间纵深感
+          float depthFade = smoothstep(8.0, 1.0, vDepth);
+          alpha *= (0.55 + 0.45 * depthFade);
+
+          // 黑洞暗化：更小的核心 + 更平缓的过渡，避免硬质圆圈
           float holeDist = length(vWorldPos - uBlackHolePos);
-          float horizon = 0.35 * uBlackHoleStrength;
-          float shadow = smoothstep(horizon, 0.0, holeDist);
-          float dim = 1.0 - shadow * 0.98;
+          float horizon = 0.18 * uBlackHoleStrength;
+          float shadow = smoothstep(horizon * 2.5, horizon, holeDist);
+          float dim = 1.0 - shadow * 0.92;
           col *= dim;
           alpha *= dim;
 

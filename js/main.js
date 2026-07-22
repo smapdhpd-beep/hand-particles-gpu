@@ -178,11 +178,16 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.getElapsedTime();
 
-  // 黑洞强度平滑插值：形成约 1.2 秒淡入，0.6 秒淡出
+  // 黑洞强度平滑插值：形成约 1.0 秒淡入，0.35 秒快速淡出，避免残影圆环
   const target = STATE.targetBlackHoleStrength;
-  const speed = target > STATE.blackHoleStrength ? 0.8 : 1.6;
+  const speed = target > STATE.blackHoleStrength ? 1.0 : 2.8;
   STATE.blackHoleStrength += (target - STATE.blackHoleStrength) * Math.min(speed * dt, 1.0);
   if (Math.abs(STATE.blackHoleStrength - target) < 0.001) STATE.blackHoleStrength = target;
+
+  // 极缓慢的相机漂移，增强空间纵深感
+  camera.position.x = Math.sin(t * 0.08) * 0.15;
+  camera.position.y = Math.cos(t * 0.06) * 0.12;
+  camera.lookAt(0, 0, 0);
 
   particleSystem.update(dt, t);
   renderer.render(scene, camera);
