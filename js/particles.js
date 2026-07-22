@@ -118,28 +118,38 @@ export class GPUParticleSystem {
         return f;
       }
 
-      // 8 字形（伯努利双纽线）力场：双手靠近时粒子沿 8 字流动
-      vec3 figure8Force(vec3 pos, vec3 center, float scale, float strength, float depthScale, vec2 uv) {
+      // 8 字形（伯努利双纽线）力场：随双手方向旋转，始终与双手连线对齐
+      vec3 figure8Force(vec3 pos, vec3 center, vec3 handDir, float scale, float strength, float depthScale, vec2 uv) {
         vec3 f = vec3(0.0);
         if (strength <= 0.001 || scale <= 0.001) return f;
+
+        // 建立局部坐标系：x 轴沿双手连线，y 轴在画面平面内垂直于 x 轴
+        vec3 xAxis = normalize(handDir);
+        vec3 ref = abs(dot(xAxis, vec3(0.0, 0.0, -1.0))) > 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, -1.0);
+        vec3 yAxis = normalize(cross(xAxis, ref));
+        vec3 zAxis = cross(xAxis, yAxis);
+
         vec3 local = pos - center;
-        float angle = atan(local.y, local.x);
+        float lx = dot(local, xAxis);
+        float ly = dot(local, yAxis);
+        float lz = dot(local, zAxis);
+
+        float angle = atan(ly, lx);
         float c2 = cos(2.0 * angle);
         if (c2 > 0.0) {
           float rCurve = scale * sqrt(c2);
-          vec3 target = vec3(rCurve * cos(angle), rCurve * sin(angle), 0.0) + center;
+          vec3 target = center + xAxis * (rCurve * cos(angle)) + yAxis * (rCurve * sin(angle));
           vec3 toCurve = target - pos;
           float d2 = dot(toCurve, toCurve);
           f += normalize(toCurve + 0.001) * strength * depthScale * 2.0 / (d2 + 0.08);
 
-          // 沿 8 字切向流动：让粒子在两个环之间循环
-          vec3 tangent = normalize(vec3(-sin(angle), cos(angle), 0.0));
-          // 根据所在半平面调整方向，保证连续环流
+          // 沿 8 字切向流动
+          vec3 tangent = normalize(-xAxis * sin(angle) + yAxis * cos(angle));
           float dirSign = sign(cos(angle));
           f += tangent * dirSign * strength * depthScale * 0.5;
 
-          // 轻微 z 方向湍动，避免完全扁平
-          f.z += (rand(uv + uTime + 4.0) - 0.5) * strength * 0.25;
+          // z 方向轻微拉回局部平面，避免粒子散开
+          f -= zAxis * lz * strength * 0.15;
         }
         return f;
       }
@@ -200,11 +210,12 @@ export class GPUParticleSystem {
         dualForce += blackHoleForce(pos.xyz, uBlackHolePos2, uBlackHoleStrength2, depthScale2, uv + 3.0);
 
         vec3 center = (uBlackHolePos + uBlackHolePos2) * 0.5;
-        float handDist = length(uBlackHolePos.xy - uBlackHolePos2.xy);
+        vec3 handDir = uBlackHolePos2 - uBlackHolePos;
+        float handDist = length(handDir);
         float f8Scale = handDist * 0.707; // 8 字焦点与双手位置对齐
         float f8Strength = totalBHStrength * (1.0 + uFigure8Active * 0.3);
         float avgDepthScale = (depthScale + depthScale2) * 0.5;
-        vec3 f8Force = figure8Force(pos.xyz, center, f8Scale, f8Strength, avgDepthScale, uv + 7.0);
+        vec3 f8Force = figure8Force(pos.xyz, center, handDir, f8Scale, f8Strength, avgDepthScale, uv + 7.0);
 
         force += mix(dualForce, f8Force, uFigure8Active);
 
@@ -313,18 +324,25 @@ export class GPUParticleSystem {
           float heat2 = uBlackHoleStrength2 * smoothstep(heatRadius2 * 2.0, heatRadius2, holeDist2);
           float heat = max(heat1, heat2);
 
-          // 8 字形热量：双手靠近时沿 8 字曲线发光
+          // 8 字形热量：双手靠近时沿 8 字曲线发光（随双手方向旋转）
           if (uFigure8Active > 0.001) {
             vec3 center = (uBlackHolePos + uBlackHolePos2) * 0.5;
+            vec3 handDir = uBlackHolePos2 - uBlackHolePos;
+            vec3 xAxis = normalize(handDir);
+            vec3 ref = abs(dot(xAxis, vec3(0.0, 0.0, -1.0))) > 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, -1.0);
+            vec3 yAxis = normalize(cross(xAxis, ref));
+
             vec3 local = vWorldPos - center;
-            float angle = atan(local.y, local.x);
+            float lx = dot(local, xAxis);
+            float ly = dot(local, yAxis);
+            float angle = atan(ly, lx);
             float c2 = cos(2.0 * angle);
             float f8Heat = 0.0;
             if (c2 > 0.0) {
-              float handDist = length(uBlackHolePos.xy - uBlackHolePos2.xy);
+              float handDist = length(handDir);
               float scale = handDist * 0.707;
               float rCurve = scale * sqrt(c2);
-              float rPos = length(local.xy);
+              float rPos = length(vec2(lx, ly));
               float distToCurve = abs(rPos - rCurve);
               float totalStr = max(uBlackHoleStrength, uBlackHoleStrength2);
               f8Heat = totalStr * smoothstep(0.35, 0.0, distToCurve);
