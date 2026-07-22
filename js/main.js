@@ -31,6 +31,11 @@ const STATE = {
   targetBlackHoleStrength2: 0,
   // 双手靠近时进入 8 字形合并模式（0=独立，1=8 字）
   figure8Active: 0,
+  // 形态塑形状态
+  shapeType: 0,            // 0=爱心 1=球体 2=螺旋 3=环面
+  shapeStrength: 0,
+  targetShapeStrength: 0,
+  shapeTimer: 0,
 };
 window.STATE = STATE;
 
@@ -181,6 +186,7 @@ function processHand(lm) {
 
   // 手势与力场模式
   const digit = detectDigit(lm);
+  const openPalm = isOpenPalm(lm);
   let gesture = 'idle';
   let forceMode = 1;
   if (blackHoleTrigger) {
@@ -192,6 +198,8 @@ function processHand(lm) {
     gesture = 'digit2'; forceMode = 3;
   } else if (digit === 3) {
     gesture = 'digit3'; forceMode = 4;
+  } else if (openPalm) {
+    gesture = 'shape'; forceMode = 5;
   }
 
   return {
@@ -219,6 +227,16 @@ function applyHandState(state, h, slot) {
   }
 }
 
+
+function isOpenPalm(lm) {
+  // 五指均伸直：拇指+食指+中指+无名指+小指
+  const thumbExt = dist3d(lm[4], lm[0]) > dist3d(lm[3], lm[0]) * 1.08;
+  const idxExt = isFingerExtended(lm, 8, 6);
+  const midExt = isFingerExtended(lm, 12, 10);
+  const ringExt = isFingerExtended(lm, 16, 14);
+  const pinkyExt = isFingerExtended(lm, 20, 18);
+  return thumbExt && idxExt && midExt && ringExt && pinkyExt;
+}
 
 function detectDigit(lm) {
   const idxExt = isFingerExtended(lm, 8, 6);
@@ -256,13 +274,17 @@ function dist3d(a, b) {
 }
 
 function updateStatus() {
-  const modeNames = ['引力奇点', '涡旋', '排斥', '布朗运动', '简谐震荡'];
+  const modeNames = ['引力奇点', '涡旋', '排斥', '布朗运动', '简谐震荡', '形态塑形'];
+  const shapeNames = ['爱心', '球体', '螺旋', '环面'];
   const bh1 = STATE.blackHoleStrength > 0.05 ? ` | 黑洞1:${(STATE.blackHoleStrength*100).toFixed(0)}%` : '';
   const bh2 = STATE.blackHoleStrength2 > 0.05 ? ` | 黑洞2:${(STATE.blackHoleStrength2*100).toFixed(0)}%` : '';
   const fig8 = STATE.figure8Active > 0.1 ? ` | 8字:${(STATE.figure8Active*100).toFixed(0)}%` : '';
   const hands = STATE.handCount > 0 ? ` | 手:${STATE.handCount}` : '';
+  const shape = STATE.forceMode === 5 && STATE.shapeStrength > 0.05
+    ? ` | ${shapeNames[STATE.shapeType % 4]}:${(STATE.shapeStrength*100).toFixed(0)}%`
+    : '';
   document.getElementById('status').textContent =
-    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture}${hands}${bh1}${bh2}${fig8}`;
+    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture}${hands}${bh1}${bh2}${fig8}${shape}`;
 }
 
 const clock = new THREE.Clock();
@@ -282,6 +304,20 @@ function animate() {
   };
   STATE.blackHoleStrength = lerpStrength(STATE.blackHoleStrength, STATE.targetBlackHoleStrength, dt);
   STATE.blackHoleStrength2 = lerpStrength(STATE.blackHoleStrength2, STATE.targetBlackHoleStrength2, dt);
+
+  // 形态塑形强度：进入 shape 模式时约 1.2 秒成形，退出时快速消散
+  if (STATE.forceMode === 5 && STATE.handPresent) {
+    STATE.targetShapeStrength = 1.0;
+    STATE.shapeTimer += dt;
+    if (STATE.shapeTimer > 4.0) {
+      STATE.shapeType = (STATE.shapeType + 1) % 4;
+      STATE.shapeTimer = 0;
+    }
+  } else {
+    STATE.targetShapeStrength = 0.0;
+    STATE.shapeTimer = 0;
+  }
+  STATE.shapeStrength = lerpStrength(STATE.shapeStrength, STATE.targetShapeStrength, dt);
 
   // 极缓慢的相机漂移，增强空间纵深感
   camera.position.x = Math.sin(t * 0.08) * 0.15;
@@ -308,6 +344,14 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
   composer.setSize(w, h);
+});
+
+// 按 S 键手动切换塑形形态
+window.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 's') {
+    STATE.shapeType = (STATE.shapeType + 1) % 4;
+    updateStatus();
+  }
 });
 
 updateStatus();

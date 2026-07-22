@@ -89,6 +89,8 @@ export class GPUParticleSystem {
       uniform float uBlackHoleStrength;
       uniform float uBlackHoleStrength2;
       uniform float uFigure8Active;
+      uniform float uShapeType;
+      uniform float uShapeStrength;
 
       // 伪随机
       float rand(vec2 co) {
@@ -154,6 +156,43 @@ export class GPUParticleSystem {
         return f;
       }
 
+      // 形态目标：根据粒子 UV 稳定映射到几何形状上的位置
+      vec3 shapeTarget(vec2 uv, float shapeType) {
+        float r = rand(uv);
+        float t = rand(uv + 0.5) * 6.28318;
+        if (shapeType < 0.5) {
+          // 0: 爱心（平面 Parametric heart，带厚度）
+          float a = t;
+          float hx = 16.0 * pow(sin(a), 3.0);
+          float hy = 13.0 * cos(a) - 5.0 * cos(2.0 * a) - 2.0 * cos(3.0 * a) - cos(4.0 * a);
+          float z = (r - 0.5) * 0.6;
+          return vec3(hx * 0.11, hy * 0.11 - 0.2, z);
+        } else if (shapeType < 1.5) {
+          // 1: 球体
+          float theta = t;
+          float phi = acos(2.0 * r - 1.0);
+          float radius = 2.0;
+          return vec3(radius * sin(phi) * cos(theta), radius * sin(phi) * sin(theta), radius * cos(phi));
+        } else if (shapeType < 2.5) {
+          // 2: 螺旋
+          float angle = t + r * 10.0;
+          float rad = 0.15 + r * 2.2;
+          float z = (t / 6.28318 - 0.5) * 3.5;
+          return vec3(rad * cos(angle), rad * sin(angle), z);
+        } else {
+          // 3: 环面
+          float tubeR = 0.55;
+          float majorR = 1.5;
+          float u = t;
+          float v = r * 6.28318;
+          return vec3(
+            (majorR + tubeR * cos(v)) * cos(u),
+            (majorR + tubeR * cos(v)) * sin(u),
+            tubeR * sin(v)
+          );
+        }
+      }
+
       void main() {
         vec2 uv = gl_FragCoord.xy / resolution.xy;
         vec4 pos = texture(texturePosition, uv);
@@ -190,11 +229,24 @@ export class GPUParticleSystem {
           ) * 2.0 - 1.0;
           force += noise * 0.15;
           force += dir / (dist * dist + 0.5) * 0.03 * depthScale;
-        } else {
+        } else if (uMode < 4.5) {
           // 4: 简谐震荡
           float phase = rand(uv) * 6.28318;
           force += vec3(cos(uTime * 1.5 + phase), sin(uTime * 1.5 + phase), 0.0) * 0.15;
           force += dir / (dist * dist + 0.5) * 0.03 * depthScale;
+        } else {
+          // 5: 形态塑形（爱心/球体/螺旋/环面）
+          vec3 target = uHandPos + shapeTarget(uv, uShapeType);
+          vec3 toTarget = target - pos.xyz;
+          float targetDist = length(toTarget);
+          // 弹簧力拉向目标形态
+          force += normalize(toTarget + 0.001) * uShapeStrength * depthScale * 1.8 / (targetDist + 0.15);
+          force += toTarget * uShapeStrength * 0.35 * depthScale;
+          // 微弱切向流动，避免死寂
+          vec3 tangent = normalize(cross(toTarget, vec3(0.0, 0.0, 1.0)));
+          force += tangent * uShapeStrength * 0.12 * depthScale;
+          // 保留轻微手引力，让形态随手动
+          force += dir / (dist * dist + 0.8) * 0.04 * depthScale;
         }
 
         // 双黑洞模式：两个黑洞独立施加力场；双手靠近时渐变为 8 字形力场
@@ -242,6 +294,8 @@ export class GPUParticleSystem {
     this.velocityVariable.material.uniforms.uBlackHoleStrength = { value: 0 };
     this.velocityVariable.material.uniforms.uBlackHoleStrength2 = { value: 0 };
     this.velocityVariable.material.uniforms.uFigure8Active = { value: 0 };
+    this.velocityVariable.material.uniforms.uShapeType = { value: 0 };
+    this.velocityVariable.material.uniforms.uShapeStrength = { value: 0 };
 
     this.gpuCompute.setVariableDependencies(this.positionVariable, [this.positionVariable, this.velocityVariable]);
     this.gpuCompute.setVariableDependencies(this.velocityVariable, [this.positionVariable, this.velocityVariable]);
@@ -436,6 +490,8 @@ export class GPUParticleSystem {
     const blackHoleStrength2 = this.state.blackHoleStrength2 || 0;
     const handDepth2 = this.state.hand2Depth || 0;
     const figure8Active = this.state.figure8Active || 0;
+    const shapeType = this.state.shapeType || 0;
+    const shapeStrength = this.state.shapeStrength || 0;
 
     this.positionVariable.material.uniforms.uDelta.value = safeDt;
     this.positionVariable.material.uniforms.uBlackHolePos.value.set(handX, handY, handZ);
@@ -454,6 +510,8 @@ export class GPUParticleSystem {
     this.velocityVariable.material.uniforms.uMode.value = this.state.forceMode || 0;
     this.velocityVariable.material.uniforms.uTime.value = time;
     this.velocityVariable.material.uniforms.uFigure8Active.value = figure8Active;
+    this.velocityVariable.material.uniforms.uShapeType.value = shapeType;
+    this.velocityVariable.material.uniforms.uShapeStrength.value = shapeStrength;
 
     this.gpuCompute.compute();
 
