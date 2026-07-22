@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { HandTracker } from './handTracker.js';
 import { GPUParticleSystem } from './particles.js';
+import { AudioEngine } from './audio.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -67,6 +68,25 @@ const handTracker = new HandTracker((result) => {
   parseGesture(result, STATE);
 });
 
+const audio = new AudioEngine();
+
+// 首次手势/点击启动音频（浏览器自动播放策略要求用户交互）
+function ensureAudio() {
+  if (!audio.started) audio.start();
+}
+window.addEventListener('pointerdown', ensureAudio, { once: true });
+window.addEventListener('keydown', ensureAudio, { once: true });
+
+const muteBtn = document.getElementById('mute-btn');
+if (muteBtn) {
+  muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const muted = audio.toggleMute();
+    muteBtn.textContent = muted ? '🔇' : '🔊';
+    muteBtn.title = muted ? '开启声音' : '静音';
+  });
+}
+
 let noHandFrames = 0, hasHandFrames = 0;
 const NO_HAND_THRESHOLD = 5;
 const HAS_HAND_THRESHOLD = 3;
@@ -89,6 +109,7 @@ function parseGesture(result, state) {
   if (hasHandFrames < HAS_HAND_THRESHOLD) return;
 
   state.handPresent = true;
+  ensureAudio(); // 手势识别也视为用户交互，启动音频
   const lm = lm0;
 
   // 手掌位置（镜像，符合自拍直觉）
@@ -208,6 +229,7 @@ function animate() {
   camera.lookAt(0, 0, 0);
 
   particleSystem.update(dt, t);
+  audio.update(STATE);
   composer.render();
 
   frameCount++;
