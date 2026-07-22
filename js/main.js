@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { HandTracker } from './handTracker.js';
 import { GPUParticleSystem } from './particles.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 /* ═══ hand-particles-gpu 主程序 ═══ */
 
@@ -27,6 +31,8 @@ camera.position.z = 5;
 const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
 document.body.appendChild(renderer.domElement);
 
 if (!renderer.capabilities.isWebGL2) {
@@ -44,6 +50,18 @@ try {
   document.getElementById('status').textContent = 'GPU 粒子系统初始化失败：' + err.message;
   throw err;
 }
+
+// 后期处理：Bloom 让暗粒子也有宇宙辉光，同时避免整体过曝
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.55,  // strength
+  0.35,  // radius
+  0.75   // threshold
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
 
 const handTracker = new HandTracker((result) => {
   parseGesture(result, STATE);
@@ -190,7 +208,7 @@ function animate() {
   camera.lookAt(0, 0, 0);
 
   particleSystem.update(dt, t);
-  renderer.render(scene, camera);
+  composer.render();
 
   frameCount++;
   if (performance.now() - lastFpsTime > 1000) {
@@ -203,9 +221,11 @@ function animate() {
 animate();
 
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
 });
 
 updateStatus();

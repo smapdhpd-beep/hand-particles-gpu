@@ -209,8 +209,8 @@ export class GPUParticleSystem {
           vec4 vel = texture2D(textureVelocity, position.xy);
           vec4 mvPosition = modelViewMatrix * vec4(pos.xyz, 1.0);
           vSpeed = length(vel.xyz);
-          // 尺寸上限控制；速度轻微影响，避免余辉粒子过大
-          gl_PointSize = min(uSize * (28.0 / max(0.1, -mvPosition.z)) * (1.0 + vSpeed * 0.4), 8.0);
+          // 小尺寸 + 轻微速度影响；Bloom 负责产生宇宙辉光
+          gl_PointSize = min(uSize * (26.0 / max(0.1, -mvPosition.z)) * (1.0 + vSpeed * 0.3), 7.0);
           gl_Position = projectionMatrix * mvPosition;
           vWorldPos = pos.xyz;
           vDepth = -mvPosition.z;
@@ -230,32 +230,29 @@ export class GPUParticleSystem {
 
           float holeDist = length(vWorldPos - uBlackHolePos);
 
-          // 吸积盘加热：只在非常接近黑洞的区域发光，范围小、过渡陡
-          float heat = uBlackHoleStrength * smoothstep(0.45, 0.04, holeDist);
+          // 吸积盘热量：仅在内侧小范围发热，过渡陡峭避免大亮斑
+          float heat = uBlackHoleStrength * smoothstep(0.9, 0.05, holeDist);
           heat = clamp(heat, 0.0, 1.0);
 
-          // 默认粒子保持可见但不发光；热量区域适度提亮
-          float brightness = 0.9 + heat * 1.6 + vSpeed * 0.2;
-          brightness = min(brightness, 1.8);
+          // 颜色从冷尘埃到热吸积盘渐变
+          vec3 coolColor = uColor * 0.5;
+          vec3 hotColor = mix(vec3(1.0, 0.55, 0.30), vec3(1.0, 0.88, 0.72), heat);
+          vec3 col = mix(coolColor, hotColor, heat);
 
-          vec3 col = uColor * brightness;
-          // 高温区域向橙白偏移
-          col = mix(col, vec3(1.0, 0.55, 0.35), heat * 0.5);
+          // 低速/无黑洞时 alpha 很低，靠 Additive + Bloom 堆积出柔和星云
+          float baseAlpha = 0.10;
+          float alpha = (baseAlpha + heat * 0.45) * (1.0 - smoothstep(0.0, 0.5, d));
 
-          // 软边圆点，默认低 alpha 避免离手后形成亮环；热量核心稍亮
-          float core = 1.0 - smoothstep(0.0, 0.25, d);
-          float alpha = (0.28 + core * 0.12 + heat * 0.45) * (1.0 - smoothstep(0.0, 0.5, d));
-
-          // 黑洞暗化：中心形成真实阴影
+          // 事件视界：粒子隐入黑暗，形成真实黑洞剪影
           float horizon = 0.10 * uBlackHoleStrength;
           float shadow = smoothstep(horizon * 2.5, horizon, holeDist);
-          float dim = 1.0 - shadow * 0.96;
+          float dim = 1.0 - shadow * 0.98;
           col *= dim;
           alpha *= dim;
 
           // 深度衰减保留空间感
           float depthFade = smoothstep(8.0, 1.0, vDepth);
-          alpha *= (0.6 + 0.4 * depthFade);
+          alpha *= (0.5 + 0.5 * depthFade);
 
           gl_FragColor = vec4(col, alpha);
         }
@@ -273,8 +270,8 @@ export class GPUParticleSystem {
     const data = texture.image.data;
     for (let i = 0; i < this.count; i++) {
       const ix = i * 4;
-      // 均匀球壳分布，避免中心聚集产生默认亮斑
-      const r = 0.8 + Math.random() * 2.7;
+      // sqrt 分布让密度向外围倾斜，避免黑洞附近过度堆积
+      const r = 0.8 + Math.sqrt(Math.random()) * 2.7;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
       data[ix]   = r * Math.sin(phi) * Math.cos(theta);
