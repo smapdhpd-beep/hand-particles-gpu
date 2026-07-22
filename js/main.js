@@ -137,9 +137,9 @@ function parseGesture(result, state) {
   if (validHands.length >= 2) {
     const h2 = processHand(validHands[1]);
     applyHandState(state, h2, 2);
-    // 双手靠近时进入 8 字合并模式（0=独立双黑洞，1=8 字形黑洞）
+    // 双手靠近时进入 8 字合并模式：只有挨得很近（<0.25）才完全 8 字，分开（>0.9）则完全独立双黑洞
     const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
-    state.figure8Active = THREE.MathUtils.smoothstep(1.4, 0.6, handDist);
+    state.figure8Active = THREE.MathUtils.smoothstep(0.9, 0.25, handDist);
   } else {
     state.hand2Present = false;
     state.targetBlackHoleStrength2 = 0;
