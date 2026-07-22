@@ -107,10 +107,18 @@ const HAS_HAND_THRESHOLD = 3;
 
 function parseGesture(result, state) {
   const hands = (result.multiHandLandmarks || []).slice(0, 2);
-  const scores = (result.multiHandedness || []).map(h => h.score ?? 0);
-  const validHands = hands.filter((_, i) => scores[i] >= 0.6);
+  const handedness = (result.multiHandedness || []).slice(0, 2);
 
-  if (validHands.length === 0) {
+  // 把 landmark 与 handedness 标签绑定，避免过滤后丢失索引
+  const handInfos = hands
+    .map((lm, i) => ({
+      lm,
+      label: handedness[i]?.label || 'Unknown',
+      score: handedness[i]?.score ?? 0,
+    }))
+    .filter(h => h.score >= 0.6);
+
+  if (handInfos.length === 0) {
     noHandFrames++; hasHandFrames = 0;
     if (noHandFrames >= NO_HAND_THRESHOLD) {
       state.handPresent = false;
@@ -128,26 +136,50 @@ function parseGesture(result, state) {
   if (hasHandFrames < HAS_HAND_THRESHOLD) return;
 
   state.handPresent = true;
-  state.handCount = validHands.length;
+  state.handCount = handInfos.length;
   ensureAudio();
 
-  // 按手腕 x 排序，让左右手槽位稳定
-  validHands.sort((a, b) => a[0].x - b[0].x);
+  // 按 handedness 固定槽位：Left → slot 1，Right → slot 2
+  // 标签缺失时退回到按手腕 x 坐标排序
+  const leftHand = handInfos.find(h => h.label === 'Left');
+  const rightHand = handInfos.find(h => h.label === 'Right');
+  const fallbackOrder = () => {
+    handInfos.sort((a, b) => a.lm[0].x - b.lm[0].x);
+    return [handInfos[0]?.lm, handInfos[1]?.lm];
+  };
 
-  // 处理主手
-  const h1 = processHand(validHands[0]);
-  applyHandState(state, h1, 1);
+  let lm1, lm2;
+  if (leftHand || rightHand) {
+    lm1 = leftHand ? leftHand.lm : null;
+    lm2 = rightHand ? rightHand.lm : null;
+  } else {
+    [lm1, lm2] = fallbackOrder();
+  }
 
-  // 处理副手
-  if (validHands.length >= 2) {
-    const h2 = processHand(validHands[1]);
+  // 处理主手（slot 1：用户左手）
+  if (lm1) {
+    const h1 = processHand(lm1);
+    applyHandState(state, h1, 1);
+  } else {
+    state.targetBlackHoleStrength = 0;
+  }
+
+  // 处理副手（slot 2：用户右手）
+  if (lm2) {
+    const h2 = processHand(lm2);
     applyHandState(state, h2, 2);
-    // 双手靠近时进入 8 字合并模式：只有挨得很近（<0.25）才完全 8 字，分开（>0.9）则完全独立双黑洞
-    const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
-    state.figure8Active = THREE.MathUtils.smoothstep(0.9, 0.25, handDist);
   } else {
     state.hand2Present = false;
     state.targetBlackHoleStrength2 = 0;
+  }
+
+  // 双手靠近时进入 8 字合并模式
+  if (lm1 && lm2) {
+    const h1 = processHand(lm1);
+    const h2 = processHand(lm2);
+    const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
+    state.figure8Active = THREE.MathUtils.smoothstep(0.9, 0.25, handDist);
+  } else {
     state.figure8Active = 0;
   }
 
