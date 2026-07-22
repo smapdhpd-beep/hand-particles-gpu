@@ -29,6 +29,8 @@ const STATE = {
   hand2Depth: 0,
   blackHoleStrength2: 0,
   targetBlackHoleStrength2: 0,
+  // 双手靠近时进入 8 字形合并模式（0=独立，1=8 字）
+  figure8Active: 0,
 };
 window.STATE = STATE;
 
@@ -135,9 +137,13 @@ function parseGesture(result, state) {
   if (validHands.length >= 2) {
     const h2 = processHand(validHands[1]);
     applyHandState(state, h2, 2);
+    // 双手靠近时进入 8 字合并模式（0=独立双黑洞，1=8 字形黑洞）
+    const handDist = Math.hypot(h1.x - h2.x, h1.y - h2.y);
+    state.figure8Active = THREE.MathUtils.smoothstep(1.4, 0.6, handDist);
   } else {
     state.hand2Present = false;
     state.targetBlackHoleStrength2 = 0;
+    state.figure8Active = 0;
   }
 
   updateStatus();
@@ -253,9 +259,10 @@ function updateStatus() {
   const modeNames = ['引力奇点', '涡旋', '排斥', '布朗运动', '简谐震荡'];
   const bh1 = STATE.blackHoleStrength > 0.05 ? ` | 黑洞1:${(STATE.blackHoleStrength*100).toFixed(0)}%` : '';
   const bh2 = STATE.blackHoleStrength2 > 0.05 ? ` | 黑洞2:${(STATE.blackHoleStrength2*100).toFixed(0)}%` : '';
+  const fig8 = STATE.figure8Active > 0.1 ? ` | 8字:${(STATE.figure8Active*100).toFixed(0)}%` : '';
   const hands = STATE.handCount > 0 ? ` | 手:${STATE.handCount}` : '';
   document.getElementById('status').textContent =
-    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture}${hands}${bh1}${bh2}`;
+    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture}${hands}${bh1}${bh2}${fig8}`;
 }
 
 const clock = new THREE.Clock();
