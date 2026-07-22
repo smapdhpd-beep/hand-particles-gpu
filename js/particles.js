@@ -235,13 +235,13 @@ export class GPUParticleSystem {
           heat = clamp(heat, 0.0, 1.0);
 
           // 颜色从冷尘埃到热吸积盘渐变
-          vec3 coolColor = uColor * 0.5;
+          vec3 coolColor = uColor * 0.72;
           vec3 hotColor = mix(vec3(1.0, 0.55, 0.30), vec3(1.0, 0.88, 0.72), heat);
           vec3 col = mix(coolColor, hotColor, heat);
 
-          // 低速/无黑洞时 alpha 很低，靠 Additive + Bloom 堆积出柔和星云
-          float baseAlpha = 0.10;
-          float alpha = (baseAlpha + heat * 0.45) * (1.0 - smoothstep(0.0, 0.5, d));
+          // 默认 alpha 提高到可见，但离手后不会形成硬质亮环；热量区域靠 Bloom 发光
+          float baseAlpha = 0.26;
+          float alpha = (baseAlpha + heat * 0.42) * (1.0 - smoothstep(0.0, 0.5, d));
 
           // 事件视界：粒子隐入黑暗，形成真实黑洞剪影
           float horizon = 0.10 * uBlackHoleStrength;
