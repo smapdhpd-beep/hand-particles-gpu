@@ -7,6 +7,7 @@
 - **6.5 万 GPU 粒子**：256×256 纹理，Three.js GPUComputationRenderer 并行模拟
 - **手势切换力场**：捏合/张开/数字 1/2/3 切换不同物理行为
 - **5 种力场预设**：引力奇点 / 涡旋 / 排斥 / 布朗运动 / 简谐震荡
+- **粒子拖尾**：速度方向拉伸 + 尾部淡出，形成彗星状尾迹
 - **发光粒子渲染**：AdditiveBlending + 自定义 ShaderMaterial
 - **MediaPipe Hands**：原生 getUserMedia 手势追踪
 - **零外部依赖**：Three.js + MediaPipe 通过 CDN 加载，无构建工具
