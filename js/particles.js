@@ -30,10 +30,22 @@ export class GPUParticleSystem {
     this.positionVariable = this.gpuCompute.addVariable('texturePosition', `
       uniform float uDelta;
       uniform vec3 uBlackHolePos;
+      uniform vec3 uBlackHolePos2;
       uniform float uBlackHoleStrength;
+      uniform float uBlackHoleStrength2;
 
       float rand(vec2 co) {
         return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+      }
+
+      void respawnAt(vec2 uv, vec3 center, inout vec4 pos) {
+        float r = 0.8 + rand(uv) * 2.4;
+        float theta = rand(uv + 1.0) * 6.28318;
+        float phi = acos(2.0 * rand(uv + 2.0) - 1.0);
+        pos.x = center.x + r * sin(phi) * cos(theta);
+        pos.y = center.y + r * sin(phi) * sin(theta);
+        pos.z = center.z + r * cos(phi) * 0.6;
+        pos.w = rand(uv + 3.0);
       }
 
       void main() {
@@ -42,17 +54,17 @@ export class GPUParticleSystem {
         vec4 vel = texture(textureVelocity, uv);
         pos.xyz += vel.xyz * uDelta;
 
-        // 事件视界：被吞噬的粒子从远处重生，形成持续吸积流
-        float holeDist = length(pos.xyz - uBlackHolePos);
-        float horizon = 0.10 * uBlackHoleStrength;
-        if (uBlackHoleStrength > 0.05 && holeDist < horizon) {
-          float r = 1.6 + rand(uv) * 2.4;
-          float theta = rand(uv + 1.0) * 6.28318;
-          float phi = acos(2.0 * rand(uv + 2.0) - 1.0);
-          pos.x = uBlackHolePos.x + r * sin(phi) * cos(theta);
-          pos.y = uBlackHolePos.y + r * sin(phi) * sin(theta);
-          pos.z = uBlackHolePos.z + r * cos(phi) * 0.6;
-          pos.w = rand(uv + 3.0); // 新生命周期种子
+        // 事件视界：被任一黑洞吞噬的粒子从该黑洞远处重生
+        float holeDist1 = length(pos.xyz - uBlackHolePos);
+        float horizon1 = 0.10 * uBlackHoleStrength;
+        if (uBlackHoleStrength > 0.05 && holeDist1 < horizon1) {
+          respawnAt(uv, uBlackHolePos, pos);
+        }
+
+        float holeDist2 = length(pos.xyz - uBlackHolePos2);
+        float horizon2 = 0.10 * uBlackHoleStrength2;
+        if (uBlackHoleStrength2 > 0.05 && holeDist2 < horizon2) {
+          respawnAt(uv, uBlackHolePos2, pos);
         }
 
         gl_FragColor = pos;
@@ -60,21 +72,49 @@ export class GPUParticleSystem {
     `, dtPosition);
     this.positionVariable.material.uniforms.uDelta = { value: 0.016 };
     this.positionVariable.material.uniforms.uBlackHolePos = { value: new THREE.Vector3() };
+    this.positionVariable.material.uniforms.uBlackHolePos2 = { value: new THREE.Vector3() };
     this.positionVariable.material.uniforms.uBlackHoleStrength = { value: 0 };
+    this.positionVariable.material.uniforms.uBlackHoleStrength2 = { value: 0 };
 
     // 速度更新 shader
     this.velocityVariable = this.gpuCompute.addVariable('textureVelocity', `
       uniform vec3 uHandPos;
       uniform float uHandActive;
       uniform float uHandDepth;
+      uniform float uHandDepth2;
       uniform vec3 uBlackHolePos;
+      uniform vec3 uBlackHolePos2;
       uniform float uMode;
       uniform float uTime;
       uniform float uBlackHoleStrength;
+      uniform float uBlackHoleStrength2;
 
       // 伪随机
       float rand(vec2 co) {
         return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+      }
+
+      // 黑洞力场计算
+      vec3 blackHoleForce(vec3 pos, vec3 holePos, float strength, float depthScale, vec2 uv) {
+        vec3 f = vec3(0.0);
+        if (strength <= 0.001) return f;
+        vec3 toHole = holePos - pos;
+        float holeDist = length(toHole);
+        vec3 holeDir = normalize(toHole + 0.001);
+
+        float pull = strength * depthScale * 2.0 / (holeDist * holeDist + 0.1);
+        vec3 holeTangent = normalize(cross(toHole, vec3(0.0, 0.0, 1.0)));
+        float swirl = strength * depthScale * 0.25 / (holeDist + 0.5);
+        vec3 turbulence = vec3(
+          rand(uv + uTime) - 0.5,
+          rand(uv + uTime + 1.0) - 0.5,
+          rand(uv + uTime + 2.0) - 0.5
+        ) * strength * 0.6;
+
+        f += holeDir * pull;
+        f += holeTangent * swirl;
+        f += turbulence;
+        return f;
       }
 
       void main() {
@@ -120,34 +160,16 @@ export class GPUParticleSystem {
           force += dir / (dist * dist + 0.5) * 0.03 * depthScale;
         }
 
-        // 黑洞模式：强径向坠入 + 弱旋涡 + 3D 湍动，避免二维稳定圆环
-        if (uBlackHoleStrength > 0.001) {
-          // 先削弱普通力场，让黑洞主导
-          force *= (1.0 - uBlackHoleStrength * 0.85);
-
-          vec3 toHole = uBlackHolePos - pos.xyz;
-          float holeDist = length(toHole);
-          vec3 holeDir = normalize(toHole + 0.001);
-
-          // 黑洞速度同样受手远近影响
-          float bhScale = depthScale;
-
-          // 径向引力主导：粒子快速坠入，不在固定半径盘旋
-          float pull = uBlackHoleStrength * bhScale * 2.0 / (holeDist * holeDist + 0.1);
-          // 极弱切向分量：只保留轻微螺旋感
-          vec3 holeTangent = normalize(cross(toHole, vec3(0.0, 0.0, 1.0)));
-          float swirl = uBlackHoleStrength * bhScale * 0.25 / (holeDist + 0.5);
-          // 3D 湍动：彻底打破盘面对称，避免圆环
-          vec3 turbulence = vec3(
-            rand(uv + uTime) - 0.5,
-            rand(uv + uTime + 1.0) - 0.5,
-            rand(uv + uTime + 2.0) - 0.5
-          ) * uBlackHoleStrength * 0.6;
-
-          force += holeDir * pull;
-          force += holeTangent * swirl;
-          force += turbulence;
+        // 双黑洞模式：两个黑洞独立施加力场
+        float totalBHStrength = max(uBlackHoleStrength, uBlackHoleStrength2);
+        if (totalBHStrength > 0.001) {
+          force *= (1.0 - totalBHStrength * 0.85);
         }
+
+        force += blackHoleForce(pos.xyz, uBlackHolePos, uBlackHoleStrength, depthScale, uv);
+
+        float depthScale2 = 0.25 + 1.25 * clamp((uHandDepth2 + 1.0) * 0.5, 0.0, 1.0);
+        force += blackHoleForce(pos.xyz, uBlackHolePos2, uBlackHoleStrength2, depthScale2, uv + 3.0);
 
         vel.xyz += force * 0.016 * handInfluence;
         vel.xyz *= 0.99; // 轻阻尼
@@ -164,10 +186,13 @@ export class GPUParticleSystem {
     this.velocityVariable.material.uniforms.uHandPos = { value: new THREE.Vector3() };
     this.velocityVariable.material.uniforms.uHandActive = { value: 0 };
     this.velocityVariable.material.uniforms.uHandDepth = { value: 0 };
+    this.velocityVariable.material.uniforms.uHandDepth2 = { value: 0 };
     this.velocityVariable.material.uniforms.uBlackHolePos = { value: new THREE.Vector3() };
+    this.velocityVariable.material.uniforms.uBlackHolePos2 = { value: new THREE.Vector3() };
     this.velocityVariable.material.uniforms.uMode = { value: 0 };
     this.velocityVariable.material.uniforms.uTime = { value: 0 };
     this.velocityVariable.material.uniforms.uBlackHoleStrength = { value: 0 };
+    this.velocityVariable.material.uniforms.uBlackHoleStrength2 = { value: 0 };
 
     this.gpuCompute.setVariableDependencies(this.positionVariable, [this.positionVariable, this.velocityVariable]);
     this.gpuCompute.setVariableDependencies(this.velocityVariable, [this.positionVariable, this.velocityVariable]);
@@ -195,8 +220,11 @@ export class GPUParticleSystem {
         uSize: { value: 1.0 },
         uTime: { value: 0 },
         uBlackHolePos: { value: new THREE.Vector3() },
+        uBlackHolePos2: { value: new THREE.Vector3() },
         uBlackHoleStrength: { value: 0 },
+        uBlackHoleStrength2: { value: 0 },
         uHandDepth: { value: 0 },
+        uHandDepth2: { value: 0 },
       },
       vertexShader: `
         uniform sampler2D texturePosition;
@@ -220,8 +248,11 @@ export class GPUParticleSystem {
       fragmentShader: `
         uniform vec3 uColor;
         uniform vec3 uBlackHolePos;
+        uniform vec3 uBlackHolePos2;
         uniform float uBlackHoleStrength;
+        uniform float uBlackHoleStrength2;
         uniform float uHandDepth;
+        uniform float uHandDepth2;
         varying vec3 vWorldPos;
         varying float vDepth;
         varying float vSpeed;
@@ -230,12 +261,17 @@ export class GPUParticleSystem {
           float d = length(uv);
           if (d > 0.5) discard;
 
-          float holeDist = length(vWorldPos - uBlackHolePos);
-          float depthFactor = 0.5 + 0.5 * clamp((uHandDepth + 1.0) * 0.5, 0.0, 1.0);
+          float holeDist1 = length(vWorldPos - uBlackHolePos);
+          float holeDist2 = length(vWorldPos - uBlackHolePos2);
+          float depthFactor1 = 0.5 + 0.5 * clamp((uHandDepth + 1.0) * 0.5, 0.0, 1.0);
+          float depthFactor2 = 0.5 + 0.5 * clamp((uHandDepth2 + 1.0) * 0.5, 0.0, 1.0);
 
-          // 吸积盘热量：手近时加热半径更大，视觉差异更明显
-          float heatRadius = 0.05 + depthFactor * 0.22;
-          float heat = uBlackHoleStrength * smoothstep(heatRadius * 2.0, heatRadius, holeDist);
+          // 吸积盘热量：手近时加热半径更大
+          float heatRadius1 = 0.05 + depthFactor1 * 0.22;
+          float heatRadius2 = 0.05 + depthFactor2 * 0.22;
+          float heat1 = uBlackHoleStrength * smoothstep(heatRadius1 * 2.0, heatRadius1, holeDist1);
+          float heat2 = uBlackHoleStrength2 * smoothstep(heatRadius2 * 2.0, heatRadius2, holeDist2);
+          float heat = max(heat1, heat2);
           heat = clamp(heat, 0.0, 1.0);
 
           // 颜色从冷尘埃到热吸积盘渐变
@@ -247,9 +283,12 @@ export class GPUParticleSystem {
           float baseAlpha = 0.26;
           float alpha = (baseAlpha + heat * 0.42) * (1.0 - smoothstep(0.0, 0.5, d));
 
-          // 事件视界：粒子隐入黑暗，形成真实黑洞剪影
-          float horizon = 0.10 * uBlackHoleStrength;
-          float shadow = smoothstep(horizon * 2.5, horizon, holeDist);
+          // 事件视界：任一黑洞中心形成真实阴影
+          float horizon1 = 0.10 * uBlackHoleStrength;
+          float horizon2 = 0.10 * uBlackHoleStrength2;
+          float shadow1 = smoothstep(horizon1 * 2.5, horizon1, holeDist1);
+          float shadow2 = smoothstep(horizon2 * 2.5, horizon2, holeDist2);
+          float shadow = max(shadow1, shadow2);
           float dim = 1.0 - shadow * 0.98;
           col *= dim;
           alpha *= dim;
@@ -314,15 +353,26 @@ export class GPUParticleSystem {
     const handActive = this.state.handPresent ? 1.0 : 0.0;
     const handDepth = this.state.handDepth || 0;
 
+    const hand2X = this.state.hand2X || 0;
+    const hand2Y = this.state.hand2Y || 0;
+    const hand2Z = this.state.hand2Depth || 0;
+    const blackHoleStrength2 = this.state.blackHoleStrength2 || 0;
+    const handDepth2 = this.state.hand2Depth || 0;
+
     this.positionVariable.material.uniforms.uDelta.value = safeDt;
     this.positionVariable.material.uniforms.uBlackHolePos.value.set(handX, handY, handZ);
+    this.positionVariable.material.uniforms.uBlackHolePos2.value.set(hand2X, hand2Y, hand2Z);
     this.positionVariable.material.uniforms.uBlackHoleStrength.value = blackHoleStrength;
+    this.positionVariable.material.uniforms.uBlackHoleStrength2.value = blackHoleStrength2;
 
     this.velocityVariable.material.uniforms.uHandPos.value.set(handX, handY, handZ);
     this.velocityVariable.material.uniforms.uHandActive.value = handActive;
     this.velocityVariable.material.uniforms.uHandDepth.value = handDepth;
+    this.velocityVariable.material.uniforms.uHandDepth2.value = handDepth2;
     this.velocityVariable.material.uniforms.uBlackHolePos.value.set(handX, handY, handZ);
+    this.velocityVariable.material.uniforms.uBlackHolePos2.value.set(hand2X, hand2Y, hand2Z);
     this.velocityVariable.material.uniforms.uBlackHoleStrength.value = blackHoleStrength;
+    this.velocityVariable.material.uniforms.uBlackHoleStrength2.value = blackHoleStrength2;
     this.velocityVariable.material.uniforms.uMode.value = this.state.forceMode || 0;
     this.velocityVariable.material.uniforms.uTime.value = time;
 
@@ -338,7 +388,10 @@ export class GPUParticleSystem {
     this.points.material.uniforms.textureVelocity.value = rtVel.texture;
     this.points.material.uniforms.uTime.value = time;
     this.points.material.uniforms.uBlackHolePos.value.set(handX, handY, handZ);
+    this.points.material.uniforms.uBlackHolePos2.value.set(hand2X, hand2Y, hand2Z);
     this.points.material.uniforms.uBlackHoleStrength.value = blackHoleStrength;
+    this.points.material.uniforms.uBlackHoleStrength2.value = blackHoleStrength2;
     this.points.material.uniforms.uHandDepth.value = handDepth;
+    this.points.material.uniforms.uHandDepth2.value = handDepth2;
   }
 }

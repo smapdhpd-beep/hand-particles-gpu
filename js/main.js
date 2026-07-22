@@ -12,14 +12,23 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 const STATE = {
   gesture: 'idle',
   handPresent: false,
+  handCount: 0,
+  // 主手（camera 左侧，排序后 slot 0）
   handX: 0,
   handY: 0,
   handDepth: 0,
   openness: 0,
   pinchStrength: 0,
   forceMode: 0, // 0:引力 1:涡旋 2:排斥 3:布朗 4:简谐
-  blackHoleStrength: 0,      // 当前黑洞强度（0~1，平滑插值）
-  targetBlackHoleStrength: 0,// 目标黑洞强度
+  blackHoleStrength: 0,
+  targetBlackHoleStrength: 0,
+  // 副手（camera 右侧，排序后 slot 1）
+  hand2Present: false,
+  hand2X: 0,
+  hand2Y: 0,
+  hand2Depth: 0,
+  blackHoleStrength2: 0,
+  targetBlackHoleStrength2: 0,
 };
 window.STATE = STATE;
 
@@ -90,14 +99,19 @@ const NO_HAND_THRESHOLD = 5;
 const HAS_HAND_THRESHOLD = 3;
 
 function parseGesture(result, state) {
-  const lm0 = result.multiHandLandmarks?.[0];
-  const sc0 = result.multiHandedness?.[0]?.score ?? 0;
-  let palmSize = 0;
-  if (lm0) palmSize = dist3d(lm0[0], lm0[9]);
+  const hands = (result.multiHandLandmarks || []).slice(0, 2);
+  const scores = (result.multiHandedness || []).map(h => h.score ?? 0);
+  const validHands = hands.filter((_, i) => scores[i] >= 0.6);
 
-  if (!lm0 || sc0 < 0.6 || palmSize < 0.03) {
+  if (validHands.length === 0) {
     noHandFrames++; hasHandFrames = 0;
-    if (noHandFrames >= NO_HAND_THRESHOLD) state.handPresent = false;
+    if (noHandFrames >= NO_HAND_THRESHOLD) {
+      state.handPresent = false;
+      state.handCount = 0;
+      state.targetBlackHoleStrength = 0;
+      state.targetBlackHoleStrength2 = 0;
+      state.hand2Present = false;
+    }
     state.openness *= 0.9;
     state.pinchStrength *= 0.9;
     return;
@@ -107,19 +121,37 @@ function parseGesture(result, state) {
   if (hasHandFrames < HAS_HAND_THRESHOLD) return;
 
   state.handPresent = true;
-  ensureAudio(); // 手势识别也视为用户交互，启动音频
-  const lm = lm0;
+  state.handCount = validHands.length;
+  ensureAudio();
 
-  // 手掌位置（镜像，符合自拍直觉）
+  // 按手腕 x 排序，让左右手槽位稳定
+  validHands.sort((a, b) => a[0].x - b[0].x);
+
+  // 处理主手
+  const h1 = processHand(validHands[0]);
+  applyHandState(state, h1, 1);
+
+  // 处理副手
+  if (validHands.length >= 2) {
+    const h2 = processHand(validHands[1]);
+    applyHandState(state, h2, 2);
+  } else {
+    state.hand2Present = false;
+    state.targetBlackHoleStrength2 = 0;
+  }
+
+  updateStatus();
+}
+
+function processHand(lm) {
   const idxMcp = lm[5];
-  state.handX = (1.0 - idxMcp.x - 0.5) * 5.0;
-  state.handY = -(idxMcp.y - 0.5) * 2.8;
+  const x = (1.0 - idxMcp.x - 0.5) * 5.0;
+  const y = -(idxMcp.y - 0.5) * 2.8;
 
-  // 深度：综合 MediaPipe z 与手掌 2D 大小（近大远小），提高可靠性
   const zDepth = -((lm[5].z + lm[9].z + lm[13].z) / 3) * 4.0;
   const palmSize2d = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
   const sizeDepth = (palmSize2d - 0.06) / 0.13 - 1.0;
-  state.handDepth = THREE.MathUtils.clamp((zDepth + sizeDepth) * 0.5, -1, 1);
+  const depth = THREE.MathUtils.clamp((zDepth + sizeDepth) * 0.5, -1, 1);
 
   // 张开度
   const tips = [4, 8, 12, 16, 20];
@@ -129,45 +161,58 @@ function parseGesture(result, state) {
       sum += dist3d(lm[tips[i]], lm[tips[j]]); cnt++;
     }
   }
-  state.openness = THREE.MathUtils.clamp((sum / cnt - 0.05) / 0.30, 0, 1);
+  const openness = THREE.MathUtils.clamp((sum / cnt - 0.05) / 0.30, 0, 1);
 
   // 捏合强度
   const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
   const pEnter = palmSize2d * 0.32;
   const pExit = palmSize2d * 0.52;
-  state.pinchStrength = THREE.MathUtils.clamp((pExit - pinchDist) / (pExit - pEnter), 0, 1);
+  const pinchStrength = THREE.MathUtils.clamp((pExit - pinchDist) / (pExit - pEnter), 0, 1);
 
-  // 黑洞触发：捏合或握拳
+  // 黑洞触发
   const fist = isFist(lm);
-  const blackHoleTrigger = state.pinchStrength > 0.35 || fist;
-  state.targetBlackHoleStrength = blackHoleTrigger ? 1.0 : 0.0;
+  const blackHoleTrigger = pinchStrength > 0.35 || fist;
 
-  // 手势 -> 力场模式
-  // 捏合/握拳: 黑洞（mode 0 引力奇点作为底层，叠加黑洞螺旋）
-  // 张开: 涡旋
-  // 数字1: 排斥
-  // 数字2: 布朗
-  // 数字3: 简谐
+  // 手势与力场模式
   const digit = detectDigit(lm);
+  let gesture = 'idle';
+  let forceMode = 1;
   if (blackHoleTrigger) {
-    state.gesture = fist ? 'fist' : 'pinch';
-    state.forceMode = 0;
+    gesture = fist ? 'fist' : 'pinch';
+    forceMode = 0;
   } else if (digit === 1) {
-    state.gesture = 'digit1';
-    state.forceMode = 2;
+    gesture = 'digit1'; forceMode = 2;
   } else if (digit === 2) {
-    state.gesture = 'digit2';
-    state.forceMode = 3;
+    gesture = 'digit2'; forceMode = 3;
   } else if (digit === 3) {
-    state.gesture = 'digit3';
-    state.forceMode = 4;
-  } else {
-    state.gesture = 'idle';
-    state.forceMode = 1; // 默认涡旋
+    gesture = 'digit3'; forceMode = 4;
   }
 
-  updateStatus();
+  return {
+    x, y, depth, openness, pinchStrength,
+    fist, blackHoleTrigger, gesture, forceMode
+  };
 }
+
+function applyHandState(state, h, slot) {
+  if (slot === 1) {
+    state.handX = h.x;
+    state.handY = h.y;
+    state.handDepth = h.depth;
+    state.openness = h.openness;
+    state.pinchStrength = h.pinchStrength;
+    state.gesture = h.gesture;
+    state.forceMode = h.forceMode;
+    state.targetBlackHoleStrength = h.blackHoleTrigger ? 1.0 : 0.0;
+  } else {
+    state.hand2Present = true;
+    state.hand2X = h.x;
+    state.hand2Y = h.y;
+    state.hand2Depth = h.depth;
+    state.targetBlackHoleStrength2 = h.blackHoleTrigger ? 1.0 : 0.0;
+  }
+}
+
 
 function detectDigit(lm) {
   const idxExt = isFingerExtended(lm, 8, 6);
@@ -206,9 +251,11 @@ function dist3d(a, b) {
 
 function updateStatus() {
   const modeNames = ['引力奇点', '涡旋', '排斥', '布朗运动', '简谐震荡'];
-  const bh = STATE.blackHoleStrength > 0.05 ? ` | 黑洞:${(STATE.blackHoleStrength*100).toFixed(0)}%` : '';
+  const bh1 = STATE.blackHoleStrength > 0.05 ? ` | 黑洞1:${(STATE.blackHoleStrength*100).toFixed(0)}%` : '';
+  const bh2 = STATE.blackHoleStrength2 > 0.05 ? ` | 黑洞2:${(STATE.blackHoleStrength2*100).toFixed(0)}%` : '';
+  const hands = STATE.handCount > 0 ? ` | 手:${STATE.handCount}` : '';
   document.getElementById('status').textContent =
-    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture} | O:${(STATE.openness*100).toFixed(0)}%${bh}`;
+    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture}${hands}${bh1}${bh2}`;
 }
 
 const clock = new THREE.Clock();
@@ -219,11 +266,15 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.getElapsedTime();
 
-  // 黑洞强度平滑插值：形成约 1.0 秒淡入，0.25 秒快速淡出，避免残影圆环
-  const target = STATE.targetBlackHoleStrength;
-  const speed = target > STATE.blackHoleStrength ? 1.0 : 4.0;
-  STATE.blackHoleStrength += (target - STATE.blackHoleStrength) * Math.min(speed * dt, 1.0);
-  if (Math.abs(STATE.blackHoleStrength - target) < 0.001) STATE.blackHoleStrength = target;
+  // 两个黑洞强度分别平滑插值
+  const lerpStrength = (current, target, dt) => {
+    const speed = target > current ? 1.0 : 4.0;
+    let v = current + (target - current) * Math.min(speed * dt, 1.0);
+    if (Math.abs(v - target) < 0.001) v = target;
+    return v;
+  };
+  STATE.blackHoleStrength = lerpStrength(STATE.blackHoleStrength, STATE.targetBlackHoleStrength, dt);
+  STATE.blackHoleStrength2 = lerpStrength(STATE.blackHoleStrength2, STATE.targetBlackHoleStrength2, dt);
 
   // 极缓慢的相机漂移，增强空间纵深感
   camera.position.x = Math.sin(t * 0.08) * 0.15;

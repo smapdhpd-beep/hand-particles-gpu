@@ -209,22 +209,31 @@ export class AudioEngine {
       this.ctx.resume();
     }
 
-    const bh = state.blackHoleStrength || 0;
-    const depth = clamp(state.handDepth || 0, -1, 1);
-    // 深度对速度和音效的缩放：远手 0.25x，近手 1.5x（6 倍差异，更明显）
-    const depthScale = 0.25 + 1.25 * clamp((depth + 1.0) * 0.5, 0.0, 1.0);
+    const bh1 = state.blackHoleStrength || 0;
+    const bh2 = state.blackHoleStrength2 || 0;
+    const totalBH = Math.max(bh1, bh2);
+    const bothActive = (bh1 > 0.05 && bh2 > 0.05) ? 1.0 : 0.0;
 
-    // 无手且黑洞已消散时整体静音；有手时恢复
-    const active = state.handPresent || bh > 0.05;
+    // 空间声像放在活跃黑洞的平均位置
+    if (this.panner) {
+      let px = 0, py = 0, pz = 0, w = 0;
+      if (bh1 > 0.05) { px += state.handX || 0; py += state.handY || 0; pz += state.handDepth || 0; w++; }
+      if (bh2 > 0.05) { px += state.hand2X || 0; py += state.hand2Y || 0; pz += state.hand2Depth || 0; w++; }
+      if (w > 0) {
+        this.panner.positionX.setTargetAtTime(px / w, t, 0.05);
+        this.panner.positionY.setTargetAtTime(py / w, t, 0.05);
+        this.panner.positionZ.setTargetAtTime(pz / w, t, 0.05);
+      } else if (state.handPresent) {
+        this.panner.positionX.setTargetAtTime(state.handX || 0, t, 0.05);
+        this.panner.positionY.setTargetAtTime(state.handY || 0, t, 0.05);
+        this.panner.positionZ.setTargetAtTime(state.handDepth || 0, t, 0.05);
+      }
+    }
+
+    // 无手且黑洞消散后整体静音
+    const active = state.handPresent || totalBH > 0.05;
     const masterTarget = (!active || this.muted) ? 0.0 : 0.55;
     this.master.gain.setTargetAtTime(masterTarget, t, 0.15);
-
-    // 空间声像跟随手/黑洞位置
-    if (this.panner) {
-      this.panner.positionX.setTargetAtTime(state.handX || 0, t, 0.05);
-      this.panner.positionY.setTargetAtTime(state.handY || 0, t, 0.05);
-      this.panner.positionZ.setTargetAtTime(state.handDepth || 0, t, 0.05);
-    }
 
     // 环境音：仅在有手时出现
     if (this.ambient) {
@@ -232,21 +241,27 @@ export class AudioEngine {
       this.ambient.gain.gain.setTargetAtTime(ambientVol, t, 0.2);
     }
 
-    // 黑洞轰鸣：随强度变大，频率略降，模拟质量感
+    // 黑洞轰鸣：双黑洞时额外增强
     if (this.rumble) {
-      const rumbleVol = bh * 0.28 * depthScale;
+      const depth1 = clamp(state.handDepth || 0, -1, 1);
+      const depth2 = clamp(state.hand2Depth || 0, -1, 1);
+      const depthScale = 0.6 + 0.4 * (Math.max(depth1, depth2) + 1) * 0.5;
+      const rumbleVol = totalBH * 0.28 * depthScale * (1.0 + bothActive * 0.4);
       this.rumble.gain.gain.setTargetAtTime(rumbleVol, t, 0.05);
-      this.rumble.osc.frequency.setTargetAtTime(55 - bh * 12, t, 0.1);
-      this.rumble.sub.frequency.setTargetAtTime(28 - bh * 6, t, 0.1);
-      this.rumble.noiseFilter.frequency.setTargetAtTime(90 + bh * 60, t, 0.1);
+      this.rumble.osc.frequency.setTargetAtTime(55 - totalBH * 12, t, 0.1);
+      this.rumble.sub.frequency.setTargetAtTime(28 - totalBH * 6, t, 0.1);
+      this.rumble.noiseFilter.frequency.setTargetAtTime(90 + totalBH * 60, t, 0.1);
     }
 
     // 吸积盘流动声
     if (this.flow) {
-      const flowVol = Math.pow(bh, 1.5) * 0.18 * depthScale;
+      const depth1 = clamp(state.handDepth || 0, -1, 1);
+      const depth2 = clamp(state.hand2Depth || 0, -1, 1);
+      const depthScale = 0.6 + 0.4 * (Math.max(depth1, depth2) + 1) * 0.5;
+      const flowVol = Math.pow(totalBH, 1.5) * 0.18 * depthScale * (1.0 + bothActive * 0.3);
       this.flow.gain.gain.setTargetAtTime(flowVol, t, 0.05);
-      this.flow.filter.frequency.setTargetAtTime(600 + bh * 900 * depthScale, t, 0.1);
-      this.flow.filter.Q.setTargetAtTime(1.0 + bh * 2.0, t, 0.1);
+      this.flow.filter.frequency.setTargetAtTime(600 + totalBH * 900 * depthScale, t, 0.1);
+      this.flow.filter.Q.setTargetAtTime(1.0 + totalBH * 2.0, t, 0.1);
     }
 
     // 模式切换提示音
