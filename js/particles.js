@@ -329,6 +329,7 @@ export class GPUParticleSystem {
         uHandDepth: { value: 0 },
         uHandDepth2: { value: 0 },
         uFigure8Active: { value: 0 },
+        uShapeStrength: { value: 0 },
       },
       vertexShader: `
         uniform sampler2D texturePosition;
@@ -358,6 +359,7 @@ export class GPUParticleSystem {
         uniform float uHandDepth;
         uniform float uHandDepth2;
         uniform float uFigure8Active;
+        uniform float uShapeStrength;
         varying vec3 vWorldPos;
         varying float vDepth;
         varying float vSpeed;
@@ -411,8 +413,11 @@ export class GPUParticleSystem {
           vec3 col = mix(coolColor, hotColor, heat);
 
           // 默认 alpha 提高到可见，但离手后不会形成硬质亮环；热量区域靠 Bloom 发光
-          float baseAlpha = 0.26;
+          float baseAlpha = 0.26 + uShapeStrength * 0.18;
           float alpha = (baseAlpha + heat * 0.42) * (1.0 - smoothstep(0.0, 0.5, d));
+
+          // 塑形模式下略微提亮粒子，让几何形态更醒目
+          col *= (1.0 + uShapeStrength * 0.25);
 
           // 事件视界：任一黑洞中心形成真实阴影
           float horizon1 = 0.10 * uBlackHoleStrength;
@@ -531,5 +536,6 @@ export class GPUParticleSystem {
     this.points.material.uniforms.uHandDepth.value = handDepth;
     this.points.material.uniforms.uHandDepth2.value = handDepth2;
     this.points.material.uniforms.uFigure8Active.value = figure8Active;
+    this.points.material.uniforms.uShapeStrength.value = shapeStrength;
   }
 }

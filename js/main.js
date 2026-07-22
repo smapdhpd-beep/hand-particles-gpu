@@ -209,10 +209,12 @@ function processHand(lm) {
 }
 
 function applyHandState(state, h, slot) {
+  const smooth = (current, target, factor) => current + (target - current) * factor;
+  const factor = 0.18; // 位置平滑系数（越小越慢，越大越跟手）
   if (slot === 1) {
-    state.handX = h.x;
-    state.handY = h.y;
-    state.handDepth = h.depth;
+    state.handX = smooth(state.handX, h.x, factor);
+    state.handY = smooth(state.handY, h.y, factor);
+    state.handDepth = smooth(state.handDepth, h.depth, factor);
     state.openness = h.openness;
     state.pinchStrength = h.pinchStrength;
     state.gesture = h.gesture;
@@ -220,9 +222,9 @@ function applyHandState(state, h, slot) {
     state.targetBlackHoleStrength = h.blackHoleTrigger ? 1.0 : 0.0;
   } else {
     state.hand2Present = true;
-    state.hand2X = h.x;
-    state.hand2Y = h.y;
-    state.hand2Depth = h.depth;
+    state.hand2X = smooth(state.hand2X, h.x, factor);
+    state.hand2Y = smooth(state.hand2Y, h.y, factor);
+    state.hand2Depth = smooth(state.hand2Depth, h.depth, factor);
     state.targetBlackHoleStrength2 = h.blackHoleTrigger ? 1.0 : 0.0;
   }
 }
@@ -309,7 +311,7 @@ function animate() {
   if (STATE.forceMode === 5 && STATE.handPresent) {
     STATE.targetShapeStrength = 1.0;
     STATE.shapeTimer += dt;
-    if (STATE.shapeTimer > 4.0) {
+    if (STATE.shapeTimer > 6.0) {
       STATE.shapeType = (STATE.shapeType + 1) % 4;
       STATE.shapeTimer = 0;
     }
