@@ -330,6 +330,7 @@ export class GPUParticleSystem {
         uHandDepth2: { value: 0 },
         uFigure8Active: { value: 0 },
         uShapeStrength: { value: 0 },
+        uShapeType: { value: 0 },
       },
       vertexShader: `
         uniform sampler2D texturePosition;
@@ -360,6 +361,7 @@ export class GPUParticleSystem {
         uniform float uHandDepth2;
         uniform float uFigure8Active;
         uniform float uShapeStrength;
+        uniform float uShapeType;
         varying vec3 vWorldPos;
         varying float vDepth;
         varying float vSpeed;
@@ -408,7 +410,15 @@ export class GPUParticleSystem {
           heat = clamp(heat, 0.0, 1.0);
 
           // 颜色从冷尘埃到热吸积盘渐变
-          vec3 coolColor = uColor * 0.72;
+          // 形态塑形颜色主题：爱心/球体/螺旋/环面
+          vec3 shapeColor;
+          if (uShapeType < 0.5) shapeColor = vec3(0.816, 0.376, 0.502);      // 爱心
+          else if (uShapeType < 1.5) shapeColor = vec3(0.376, 0.627, 0.816);  // 球体
+          else if (uShapeType < 2.5) shapeColor = vec3(0.816, 0.627, 0.314);  // 螺旋
+          else shapeColor = vec3(0.565, 0.376, 0.816);                         // 环面
+          vec3 baseColor = mix(uColor, shapeColor, uShapeStrength);
+
+          vec3 coolColor = baseColor * 0.72;
           vec3 hotColor = mix(vec3(1.0, 0.55, 0.30), vec3(1.0, 0.88, 0.72), heat);
           vec3 col = mix(coolColor, hotColor, heat);
 
@@ -537,5 +547,6 @@ export class GPUParticleSystem {
     this.points.material.uniforms.uHandDepth2.value = handDepth2;
     this.points.material.uniforms.uFigure8Active.value = figure8Active;
     this.points.material.uniforms.uShapeStrength.value = shapeStrength;
+    this.points.material.uniforms.uShapeType.value = shapeType;
   }
 }

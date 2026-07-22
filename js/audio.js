@@ -16,7 +16,6 @@ export class AudioEngine {
     this.ambient = null;
     this.rumble = null;
     this.flow = null;
-    this.shape = null;
 
     // 上一帧状态，用于检测模式切换
     this.lastForceMode = 0;
@@ -49,7 +48,6 @@ export class AudioEngine {
     this._createAmbient();
     this._createRumble();
     this._createFlow();
-    this._createShape();
 
     this.started = true;
   }
@@ -165,44 +163,6 @@ export class AudioEngine {
     this.flow = { src, filter, gain };
   }
 
-  _createShape() {
-    // 形态塑形音效：两个失谐正弦波 + 轻微 FM，营造“水晶塑形”感
-    const oscA = this.ctx.createOscillator();
-    oscA.type = 'sine';
-    oscA.frequency.value = 220;
-
-    const oscB = this.ctx.createOscillator();
-    oscB.type = 'triangle';
-    oscB.frequency.value = 223; // 轻微拍频
-
-    const fm = this.ctx.createOscillator();
-    fm.type = 'sine';
-    fm.frequency.value = 2.5;
-    const fmGain = this.ctx.createGain();
-    fmGain.gain.value = 8;
-    fm.connect(fmGain);
-    fmGain.connect(oscA.frequency);
-
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = 1200;
-    filter.Q.value = 0.8;
-
-    const gain = this.ctx.createGain();
-    gain.gain.value = 0;
-
-    oscA.connect(filter);
-    oscB.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.master);
-
-    oscA.start();
-    oscB.start();
-    fm.start();
-
-    this.shape = { oscA, oscB, fm, filter, gain };
-  }
-
   _playModeChirp(mode) {
     if (!this.started || this.muted) return;
     const t = this.ctx.currentTime;
@@ -302,22 +262,6 @@ export class AudioEngine {
       this.flow.gain.gain.setTargetAtTime(flowVol, t, 0.05);
       this.flow.filter.frequency.setTargetAtTime(600 + totalBH * 900 * depthScale, t, 0.1);
       this.flow.filter.Q.setTargetAtTime(1.0 + totalBH * 2.0, t, 0.1);
-    }
-
-    // 形态塑形音效：随 shapeType 改变基频
-    if (this.shape) {
-      const shapeStrength = state.shapeStrength || 0;
-      const shapeType = state.shapeType || 0;
-      const baseFreqs = [220, 330, 440, 277]; // 爱心/球体/螺旋/环面
-      const baseFreq = baseFreqs[shapeType % 4];
-      const depth = clamp(state.handDepth || 0, -1, 1);
-      const depthScale = 0.7 + 0.3 * (depth + 1) * 0.5;
-      const shapeVol = Math.pow(shapeStrength, 1.5) * 0.045 * depthScale;
-      this.shape.gain.gain.setTargetAtTime(shapeVol, t, 0.08);
-      this.shape.oscA.frequency.setTargetAtTime(baseFreq * depthScale, t, 0.1);
-      this.shape.oscB.frequency.setTargetAtTime(baseFreq * 1.5 * depthScale, t, 0.1);
-      this.shape.fm.frequency.setTargetAtTime(2.0 + shapeStrength * 3.0, t, 0.1);
-      this.shape.filter.frequency.setTargetAtTime(800 + shapeStrength * 1200, t, 0.1);
     }
 
     // 模式切换提示音
