@@ -116,7 +116,7 @@ export class GPUParticleSystem {
           force += dir / (dist * dist + 0.5) * 0.03;
         }
 
-        // 黑洞模式：3D 螺旋坠入，避免形成二维稳定圆环
+        // 黑洞模式：3D 吸积盘 + 螺旋坠入，避免二维稳定圆环
         if (uBlackHoleStrength > 0.001) {
           // 先削弱普通力场，让黑洞主导
           force *= (1.0 - uBlackHoleStrength * 0.85);
@@ -125,21 +125,19 @@ export class GPUParticleSystem {
           float holeDist = length(toHole);
           vec3 holeDir = normalize(toHole + 0.001);
 
-          // 较强径向引力主导：粒子从四面八方螺旋坠入，而非在固定半径盘旋
-          float pull = uBlackHoleStrength * 1.6 / (holeDist * holeDist + 0.15);
-          // 极弱切向分量：仅保留轻微旋转感，避免形成硬质圆环
+          // 强径向引力：粒子从各方向坠入
+          float pull = uBlackHoleStrength * 1.5 / (holeDist * holeDist + 0.12);
+          // 适度切向旋涡：形成吸积盘的旋转感，但避免固定圆环
           vec3 holeTangent = normalize(cross(toHole, vec3(0.0, 0.0, 1.0)));
-          float swirl = uBlackHoleStrength * 0.2 / (holeDist + 0.4);
-          // 3D 湍动：打破盘面对称，增加空间厚度
-          vec3 turbulence = vec3(
-            rand(uv + uTime) - 0.5,
-            rand(uv + uTime + 1.0) - 0.5,
-            rand(uv + uTime + 2.0) - 0.5
-          ) * uBlackHoleStrength * 0.35;
+          float swirl = uBlackHoleStrength * 0.6 / (holeDist + 0.25);
+          // 轻微盘化 + z 方向湍动：有盘感但不扁平
+          float diskFlatten = -holeDir.z * uBlackHoleStrength * 0.25;
+          vec3 zTurbulence = vec3(0.0, 0.0, (rand(uv + uTime) - 0.5) * uBlackHoleStrength * 0.5);
 
           force += holeDir * pull;
           force += holeTangent * swirl;
-          force += turbulence;
+          force += vec3(0.0, 0.0, diskFlatten);
+          force += zTurbulence;
         }
 
         vel.xyz += force * 0.016 * handInfluence;
@@ -183,7 +181,7 @@ export class GPUParticleSystem {
       uniforms: {
         texturePosition: { value: null },
         textureVelocity: { value: null },
-        uColor: { value: new THREE.Color('#c86f8a') },
+        uColor: { value: new THREE.Color('#d07090') },
         uSize: { value: 1.0 },
         uTime: { value: 0 },
         uBlackHolePos: { value: new THREE.Vector3() },
@@ -195,11 +193,14 @@ export class GPUParticleSystem {
         uniform float uSize;
         varying vec3 vWorldPos;
         varying float vDepth;
+        varying float vSpeed;
         void main() {
           vec4 pos = texture2D(texturePosition, position.xy);
+          vec4 vel = texture2D(textureVelocity, position.xy);
           vec4 mvPosition = modelViewMatrix * vec4(pos.xyz, 1.0);
-          // 固定尺寸，不随速度变化；上限稍大确保默认状态可见
-          gl_PointSize = min(uSize * (24.0 / max(0.1, -mvPosition.z)), 7.0);
+          vSpeed = length(vel.xyz);
+          // 尺寸上限提高，确保默认星云可见；速度仅轻微影响尺寸
+          gl_PointSize = min(uSize * (28.0 / max(0.1, -mvPosition.z)) * (1.0 + vSpeed * 0.8), 10.0);
           gl_Position = projectionMatrix * mvPosition;
           vWorldPos = pos.xyz;
           vDepth = -mvPosition.z;
@@ -211,33 +212,47 @@ export class GPUParticleSystem {
         uniform float uBlackHoleStrength;
         varying vec3 vWorldPos;
         varying float vDepth;
+        varying float vSpeed;
         void main() {
           vec2 uv = gl_PointCoord - 0.5;
           float d = length(uv);
           if (d > 0.5) discard;
 
-          // 柔和软边圆点，基础亮度提高
-          float alpha = 1.0 - smoothstep(0.0, 0.5, d);
-          vec3 col = uColor * 0.85;
-
-          // 深度衰减：远处粒子更淡，增强空间纵深感
-          float depthFade = smoothstep(8.0, 1.0, vDepth);
-          alpha *= (0.55 + 0.45 * depthFade);
-
-          // 黑洞暗化：更小的核心 + 更平缓的过渡，避免硬质圆圈
           float holeDist = length(vWorldPos - uBlackHolePos);
-          float horizon = 0.18 * uBlackHoleStrength;
-          float shadow = smoothstep(horizon * 2.5, horizon, holeDist);
-          float dim = 1.0 - shadow * 0.92;
+
+          // 吸积盘加热：越接近黑洞，粒子越亮、越热
+          float heat = uBlackHoleStrength * smoothstep(1.0, 0.08, holeDist);
+          heat = clamp(heat, 0.0, 1.0);
+
+          // 基础亮度大幅提高；热量区域进一步提亮但严格封顶
+          float brightness = 1.2 + heat * 2.2 + vSpeed * 0.4;
+          brightness = min(brightness, 3.0);
+
+          vec3 col = uColor * brightness;
+          // 高温区域向橙白偏移，模拟吸积盘热辐射
+          col = mix(col, vec3(1.0, 0.55, 0.35), heat * 0.55);
+
+          // 软边圆点 + 热量核心微光
+          float core = 1.0 - smoothstep(0.0, 0.25, d);
+          float alpha = (0.65 + core * 0.35 + heat * 0.4) * (1.0 - smoothstep(0.0, 0.5, d));
+
+          // 黑洞暗化：中心形成真实阴影
+          float horizon = 0.12 * uBlackHoleStrength;
+          float shadow = smoothstep(horizon * 3.0, horizon, holeDist);
+          float dim = 1.0 - shadow * 0.96;
           col *= dim;
           alpha *= dim;
+
+          // 深度衰减保留空间感
+          float depthFade = smoothstep(8.0, 1.0, vDepth);
+          alpha *= (0.6 + 0.4 * depthFade);
 
           gl_FragColor = vec4(col, alpha);
         }
       `,
       transparent: true,
       depthWrite: false,
-      blending: THREE.NormalBlending,
+      blending: THREE.AdditiveBlending,
     });
 
     this.points = new THREE.Points(geometry, material);
