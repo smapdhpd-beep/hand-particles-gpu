@@ -66,6 +66,7 @@ export class GPUParticleSystem {
     this.velocityVariable = this.gpuCompute.addVariable('textureVelocity', `
       uniform vec3 uHandPos;
       uniform float uHandActive;
+      uniform float uHandDepth;
       uniform vec3 uBlackHolePos;
       uniform float uMode;
       uniform float uTime;
@@ -89,17 +90,20 @@ export class GPUParticleSystem {
         // 无手时 handInfluence 为 0，避免默认状态粒子被拉向画面中心
         float handInfluence = uHandActive * smoothstep(8.0, 2.0, dist);
 
+        // 手远近影响全局速度感：远慢近快
+        float depthScale = 0.35 + 0.85 * clamp(uHandDepth, -1.0, 1.0);
+
         if (uMode < 0.5) {
           // 0: 引力奇点
-          force += dir / (dist * dist + 0.1) * 0.25;
+          force += dir / (dist * dist + 0.1) * 0.25 * depthScale;
         } else if (uMode < 1.5) {
           // 1: 涡旋（默认漂浮，弱向心力避免中心过亮）
           vec3 tangent = normalize(cross(toHand, vec3(0.0, 0.0, 1.0)));
-          force += tangent / (dist + 0.2) * 0.25;
-          force += dir / (dist * dist + 0.5) * 0.02;
+          force += tangent / (dist + 0.2) * 0.25 * depthScale;
+          force += dir / (dist * dist + 0.5) * 0.02 * depthScale;
         } else if (uMode < 2.5) {
           // 2: 排斥
-          force -= dir / (dist * dist + 0.1) * 0.25;
+          force -= dir / (dist * dist + 0.1) * 0.25 * depthScale;
         } else if (uMode < 3.5) {
           // 3: 布朗运动
           vec3 noise = vec3(
@@ -108,15 +112,15 @@ export class GPUParticleSystem {
             rand(uv + uTime + 2.0)
           ) * 2.0 - 1.0;
           force += noise * 0.15;
-          force += dir / (dist * dist + 0.5) * 0.03;
+          force += dir / (dist * dist + 0.5) * 0.03 * depthScale;
         } else {
           // 4: 简谐震荡
           float phase = rand(uv) * 6.28318;
           force += vec3(cos(uTime * 1.5 + phase), sin(uTime * 1.5 + phase), 0.0) * 0.15;
-          force += dir / (dist * dist + 0.5) * 0.03;
+          force += dir / (dist * dist + 0.5) * 0.03 * depthScale;
         }
 
-        // 黑洞模式：3D 吸积盘 + 螺旋坠入，避免二维稳定圆环
+        // 黑洞模式：强径向坠入 + 弱旋涡 + 3D 湍动，避免二维稳定圆环
         if (uBlackHoleStrength > 0.001) {
           // 先削弱普通力场，让黑洞主导
           force *= (1.0 - uBlackHoleStrength * 0.85);
@@ -125,19 +129,24 @@ export class GPUParticleSystem {
           float holeDist = length(toHole);
           vec3 holeDir = normalize(toHole + 0.001);
 
-          // 强径向引力：粒子从各方向坠入
-          float pull = uBlackHoleStrength * 1.5 / (holeDist * holeDist + 0.12);
-          // 适度切向旋涡：形成吸积盘的旋转感，但避免固定圆环
+          // 黑洞速度同样受手远近影响
+          float bhScale = depthScale;
+
+          // 径向引力主导：粒子快速坠入，不在固定半径盘旋
+          float pull = uBlackHoleStrength * bhScale * 2.0 / (holeDist * holeDist + 0.1);
+          // 极弱切向分量：只保留轻微螺旋感
           vec3 holeTangent = normalize(cross(toHole, vec3(0.0, 0.0, 1.0)));
-          float swirl = uBlackHoleStrength * 0.6 / (holeDist + 0.25);
-          // 轻微盘化 + z 方向湍动：有盘感但不扁平
-          float diskFlatten = -holeDir.z * uBlackHoleStrength * 0.25;
-          vec3 zTurbulence = vec3(0.0, 0.0, (rand(uv + uTime) - 0.5) * uBlackHoleStrength * 0.5);
+          float swirl = uBlackHoleStrength * bhScale * 0.25 / (holeDist + 0.5);
+          // 3D 湍动：彻底打破盘面对称，避免圆环
+          vec3 turbulence = vec3(
+            rand(uv + uTime) - 0.5,
+            rand(uv + uTime + 1.0) - 0.5,
+            rand(uv + uTime + 2.0) - 0.5
+          ) * uBlackHoleStrength * 0.6;
 
           force += holeDir * pull;
           force += holeTangent * swirl;
-          force += vec3(0.0, 0.0, diskFlatten);
-          force += zTurbulence;
+          force += turbulence;
         }
 
         vel.xyz += force * 0.016 * handInfluence;
@@ -154,6 +163,7 @@ export class GPUParticleSystem {
     `, dtVelocity);
     this.velocityVariable.material.uniforms.uHandPos = { value: new THREE.Vector3() };
     this.velocityVariable.material.uniforms.uHandActive = { value: 0 };
+    this.velocityVariable.material.uniforms.uHandDepth = { value: 0 };
     this.velocityVariable.material.uniforms.uBlackHolePos = { value: new THREE.Vector3() };
     this.velocityVariable.material.uniforms.uMode = { value: 0 };
     this.velocityVariable.material.uniforms.uTime = { value: 0 };
@@ -199,8 +209,8 @@ export class GPUParticleSystem {
           vec4 vel = texture2D(textureVelocity, position.xy);
           vec4 mvPosition = modelViewMatrix * vec4(pos.xyz, 1.0);
           vSpeed = length(vel.xyz);
-          // 尺寸上限提高，确保默认星云可见；速度仅轻微影响尺寸
-          gl_PointSize = min(uSize * (28.0 / max(0.1, -mvPosition.z)) * (1.0 + vSpeed * 0.8), 10.0);
+          // 尺寸上限控制；速度轻微影响，避免余辉粒子过大
+          gl_PointSize = min(uSize * (28.0 / max(0.1, -mvPosition.z)) * (1.0 + vSpeed * 0.4), 8.0);
           gl_Position = projectionMatrix * mvPosition;
           vWorldPos = pos.xyz;
           vDepth = -mvPosition.z;
@@ -220,25 +230,25 @@ export class GPUParticleSystem {
 
           float holeDist = length(vWorldPos - uBlackHolePos);
 
-          // 吸积盘加热：越接近黑洞，粒子越亮、越热
-          float heat = uBlackHoleStrength * smoothstep(1.0, 0.08, holeDist);
+          // 吸积盘加热：只在非常接近黑洞的区域发光，范围小、过渡陡
+          float heat = uBlackHoleStrength * smoothstep(0.45, 0.04, holeDist);
           heat = clamp(heat, 0.0, 1.0);
 
-          // 基础亮度大幅提高；热量区域进一步提亮但严格封顶
-          float brightness = 1.2 + heat * 2.2 + vSpeed * 0.4;
-          brightness = min(brightness, 3.0);
+          // 默认粒子保持可见但不发光；热量区域适度提亮
+          float brightness = 0.9 + heat * 1.6 + vSpeed * 0.2;
+          brightness = min(brightness, 1.8);
 
           vec3 col = uColor * brightness;
-          // 高温区域向橙白偏移，模拟吸积盘热辐射
-          col = mix(col, vec3(1.0, 0.55, 0.35), heat * 0.55);
+          // 高温区域向橙白偏移
+          col = mix(col, vec3(1.0, 0.55, 0.35), heat * 0.5);
 
-          // 软边圆点 + 热量核心微光
+          // 软边圆点，默认低 alpha 避免离手后形成亮环；热量核心稍亮
           float core = 1.0 - smoothstep(0.0, 0.25, d);
-          float alpha = (0.65 + core * 0.35 + heat * 0.4) * (1.0 - smoothstep(0.0, 0.5, d));
+          float alpha = (0.28 + core * 0.12 + heat * 0.45) * (1.0 - smoothstep(0.0, 0.5, d));
 
           // 黑洞暗化：中心形成真实阴影
-          float horizon = 0.12 * uBlackHoleStrength;
-          float shadow = smoothstep(horizon * 3.0, horizon, holeDist);
+          float horizon = 0.10 * uBlackHoleStrength;
+          float shadow = smoothstep(horizon * 2.5, horizon, holeDist);
           float dim = 1.0 - shadow * 0.96;
           col *= dim;
           alpha *= dim;
@@ -301,6 +311,7 @@ export class GPUParticleSystem {
     const handZ = this.state.handDepth || 0;
     const blackHoleStrength = this.state.blackHoleStrength || 0;
     const handActive = this.state.handPresent ? 1.0 : 0.0;
+    const handDepth = this.state.handDepth || 0;
 
     this.positionVariable.material.uniforms.uDelta.value = safeDt;
     this.positionVariable.material.uniforms.uBlackHolePos.value.set(handX, handY, handZ);
@@ -308,6 +319,7 @@ export class GPUParticleSystem {
 
     this.velocityVariable.material.uniforms.uHandPos.value.set(handX, handY, handZ);
     this.velocityVariable.material.uniforms.uHandActive.value = handActive;
+    this.velocityVariable.material.uniforms.uHandDepth.value = handDepth;
     this.velocityVariable.material.uniforms.uBlackHolePos.value.set(handX, handY, handZ);
     this.velocityVariable.material.uniforms.uBlackHoleStrength.value = blackHoleStrength;
     this.velocityVariable.material.uniforms.uMode.value = this.state.forceMode || 0;
