@@ -13,6 +13,8 @@ const STATE = {
   openness: 0,
   pinchStrength: 0,
   forceMode: 0, // 0:引力 1:涡旋 2:排斥 3:布朗 4:简谐
+  blackHoleStrength: 0,      // 当前黑洞强度（0~1，平滑插值）
+  targetBlackHoleStrength: 0,// 目标黑洞强度
 };
 window.STATE = STATE;
 
@@ -94,15 +96,20 @@ function parseGesture(result, state) {
   const pExit = palmSize2d * 0.52;
   state.pinchStrength = THREE.MathUtils.clamp((pExit - pinchDist) / (pExit - pEnter), 0, 1);
 
+  // 黑洞触发：捏合或握拳
+  const fist = isFist(lm);
+  const blackHoleTrigger = state.pinchStrength > 0.35 || fist;
+  state.targetBlackHoleStrength = blackHoleTrigger ? 1.0 : 0.0;
+
   // 手势 -> 力场模式
-  // 捏合: 引力奇点
+  // 捏合/握拳: 黑洞（mode 0 引力奇点作为底层，叠加黑洞螺旋）
   // 张开: 涡旋
   // 数字1: 排斥
   // 数字2: 布朗
   // 数字3: 简谐
   const digit = detectDigit(lm);
-  if (state.pinchStrength > 0.4) {
-    state.gesture = 'pinch';
+  if (blackHoleTrigger) {
+    state.gesture = fist ? 'fist' : 'pinch';
     state.forceMode = 0;
   } else if (digit === 1) {
     state.gesture = 'digit1';
@@ -137,14 +144,30 @@ function isFingerExtended(lm, tipIdx, pipIdx) {
   return dist3d(lm[tipIdx], wrist) > dist3d(lm[pipIdx], wrist) * 1.15;
 }
 
+function isFist(lm) {
+  // 四指指尖到手腕的距离均小于对应 PIP 关节到手腕的距离，则判定为握拳
+  const fingers = [
+    { tip: 8, pip: 6 },
+    { tip: 12, pip: 10 },
+    { tip: 16, pip: 14 },
+    { tip: 20, pip: 18 },
+  ];
+  for (const f of fingers) {
+    if (dist3d(lm[f.tip], lm[0]) > dist3d(lm[f.pip], lm[0]) * 1.08) return false;
+  }
+  // 拇指收向掌心：拇指尖到食指根部的距离小于拇指 IP 到食指根部
+  return dist3d(lm[4], lm[5]) < dist3d(lm[3], lm[5]) * 1.15;
+}
+
 function dist3d(a, b) {
   return Math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2);
 }
 
 function updateStatus() {
   const modeNames = ['引力奇点', '涡旋', '排斥', '布朗运动', '简谐震荡'];
+  const bh = STATE.blackHoleStrength > 0.05 ? ` | 黑洞:${(STATE.blackHoleStrength*100).toFixed(0)}%` : '';
   document.getElementById('status').textContent =
-    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture} | O:${(STATE.openness*100).toFixed(0)}%`;
+    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture} | O:${(STATE.openness*100).toFixed(0)}%${bh}`;
 }
 
 const clock = new THREE.Clock();
@@ -155,6 +178,12 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.getElapsedTime();
 
+  // 黑洞强度平滑插值：形成约 1.2 秒淡入，0.6 秒淡出
+  const target = STATE.targetBlackHoleStrength;
+  const speed = target > STATE.blackHoleStrength ? 0.8 : 1.6;
+  STATE.blackHoleStrength += (target - STATE.blackHoleStrength) * Math.min(speed * dt, 1.0);
+  if (Math.abs(STATE.blackHoleStrength - target) < 0.001) STATE.blackHoleStrength = target;
+
   particleSystem.update(dt, t);
   renderer.render(scene, camera);
 
@@ -163,6 +192,7 @@ function animate() {
     document.getElementById('fps').textContent = frameCount + ' FPS';
     frameCount = 0;
     lastFpsTime = performance.now();
+    updateStatus();
   }
 }
 animate();
