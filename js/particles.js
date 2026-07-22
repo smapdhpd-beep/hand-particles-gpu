@@ -127,32 +127,54 @@ export class GPUParticleSystem {
     const material = new THREE.ShaderMaterial({
       uniforms: {
         texturePosition: { value: null },
+        textureVelocity: { value: null },
         uColor: { value: new THREE.Color('#ff6b9d') },
         uSize: { value: 1.0 },
         uTime: { value: 0 },
       },
       vertexShader: `
         uniform sampler2D texturePosition;
+        uniform sampler2D textureVelocity;
         uniform float uSize;
+        varying vec3 vVel;
         varying float vLife;
         void main() {
           vec4 pos = texture2D(texturePosition, position.xy);
+          vec4 vel = texture2D(textureVelocity, position.xy);
           vec4 mvPosition = modelViewMatrix * vec4(pos.xyz, 1.0);
-          gl_PointSize = uSize * (30.0 / max(0.1, -mvPosition.z));
+          float speed = length(vel.xyz);
+          // 速度越快，点越大，拖尾越长
+          gl_PointSize = uSize * (30.0 / max(0.1, -mvPosition.z)) * (1.0 + speed * 8.0);
           gl_Position = projectionMatrix * mvPosition;
+          vVel = vel.xyz;
           vLife = pos.w;
         }
       `,
       fragmentShader: `
         uniform vec3 uColor;
+        varying vec3 vVel;
         varying float vLife;
         void main() {
-          float d = distance(gl_PointCoord, vec2(0.5));
+          float speed = length(vVel);
+          // 速度方向在屏幕空间的投影（简化：使用 velocity.xy）
+          vec2 dir = normalize(vVel.xy + 0.001);
+          // 把 gl_PointCoord 旋转到速度方向
+          vec2 uv = gl_PointCoord - 0.5;
+          vec2 rotUV;
+          rotUV.x =  uv.x * dir.x + uv.y * dir.y;
+          rotUV.y = -uv.x * dir.y + uv.y * dir.x;
+          // 沿速度方向拉伸：速度越快越长
+          float stretch = 1.0 + speed * 12.0;
+          rotUV.x /= stretch;
+          float d = length(rotUV);
           if (d > 0.5) discard;
+          // 头部亮，尾部淡：尾部在 rotUV.x 负方向（与速度相反）
+          float trail = smoothstep(-0.5, 0.3, rotUV.x);
           float core = 1.0 - smoothstep(0.0, 0.25, d);
           float glow = 1.0 - smoothstep(0.0, 0.50, d);
-          float alpha = (core * 0.4 + glow * 0.15);
-          gl_FragColor = vec4(uColor * (1.0 + core * 0.2), alpha);
+          float alpha = (core * 0.5 + glow * 0.2) * (0.3 + 0.7 * trail);
+          vec3 col = uColor * (1.0 + core * 0.3 + speed * 0.5);
+          gl_FragColor = vec4(col, alpha);
         }
       `,
       transparent: true,
@@ -212,12 +234,14 @@ export class GPUParticleSystem {
 
     this.gpuCompute.compute();
 
-    const rt = this.gpuCompute.getCurrentRenderTarget(this.positionVariable);
-    if (!rt || !rt.texture) {
+    const rtPos = this.gpuCompute.getCurrentRenderTarget(this.positionVariable);
+    const rtVel = this.gpuCompute.getCurrentRenderTarget(this.velocityVariable);
+    if (!rtPos || !rtPos.texture || !rtVel || !rtVel.texture) {
       console.error('GPU compute render target is null');
       return;
     }
-    this.points.material.uniforms.texturePosition.value = rt.texture;
+    this.points.material.uniforms.texturePosition.value = rtPos.texture;
+    this.points.material.uniforms.textureVelocity.value = rtVel.texture;
     this.points.material.uniforms.uTime.value = time;
   }
 }
