@@ -36,8 +36,20 @@ const STATE = {
   shapeStrength: 0,
   targetShapeStrength: 0,
   shapeTimer: 0,
+  // 全局配色主题
+  colorTheme: 0,
 };
 window.STATE = STATE;
+
+const THEMES = [
+  { name: '星云粉', color: '#d07090' },
+  { name: '宇宙青', color: '#40c0d0' },
+  { name: '银河紫', color: '#8050d0' },
+  { name: '恒星金', color: '#f09040' },
+  { name: '极光绿', color: '#50d080' },
+];
+const currentColor = new THREE.Color(THEMES[0].color);
+const targetColor = new THREE.Color(THEMES[0].color);
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x050505, 0.02);
@@ -310,6 +322,7 @@ function dist3d(a, b) {
 function updateStatus() {
   const modeNames = ['引力奇点', '涡旋', '排斥', '布朗运动', '简谐震荡', '形态塑形'];
   const shapeNames = ['爱心', '球体', '螺旋', '环面'];
+  const themeName = THEMES[STATE.colorTheme % THEMES.length].name;
   const bh1 = STATE.blackHoleStrength > 0.05 ? ` | 黑洞1:${(STATE.blackHoleStrength*100).toFixed(0)}%` : '';
   const bh2 = STATE.blackHoleStrength2 > 0.05 ? ` | 黑洞2:${(STATE.blackHoleStrength2*100).toFixed(0)}%` : '';
   const fig8 = STATE.figure8Active > 0.1 ? ` | 8字:${(STATE.figure8Active*100).toFixed(0)}%` : '';
@@ -318,7 +331,7 @@ function updateStatus() {
     ? ` | ${shapeNames[STATE.shapeType % 4]}:${(STATE.shapeStrength*100).toFixed(0)}%`
     : '';
   document.getElementById('status').textContent =
-    `模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture}${hands}${bh1}${bh2}${fig8}${shape}`;
+    `主题:${themeName} | 模式:${modeNames[STATE.forceMode]} | 手势:${STATE.gesture}${hands}${bh1}${bh2}${fig8}${shape}`;
 }
 
 const clock = new THREE.Clock();
@@ -352,6 +365,13 @@ function animate() {
     STATE.shapeTimer = 0;
   }
   STATE.shapeStrength = lerpStrength(STATE.shapeStrength, STATE.targetShapeStrength, dt);
+
+  // 全局配色主题平滑过渡
+  targetColor.set(THEMES[STATE.colorTheme % THEMES.length].color);
+  currentColor.lerp(targetColor, Math.min(2.5 * dt, 1.0));
+  if (particleSystem && particleSystem.points) {
+    particleSystem.points.material.uniforms.uColor.value.copy(currentColor);
+  }
 
   // 手远近驱动相机变焦：手靠近摄像头推进，手远离拉远
   let targetCamZ = 5.0;
@@ -391,10 +411,14 @@ window.addEventListener('resize', () => {
   composer.setSize(w, h);
 });
 
-// 按 S 键手动切换塑形形态
+// 按 S 键手动切换塑形形态，按 C 键切换全局配色主题
 window.addEventListener('keydown', (e) => {
-  if (e.key.toLowerCase() === 's') {
+  const key = e.key.toLowerCase();
+  if (key === 's') {
     STATE.shapeType = (STATE.shapeType + 1) % 4;
+    updateStatus();
+  } else if (key === 'c') {
+    STATE.colorTheme = (STATE.colorTheme + 1) % THEMES.length;
     updateStatus();
   }
 });
