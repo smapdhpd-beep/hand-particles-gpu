@@ -410,12 +410,25 @@ export class GPUParticleSystem {
           heat = clamp(heat, 0.0, 1.0);
 
           // 颜色从冷尘埃到热吸积盘渐变
-          // 形态塑形颜色主题：爱心/球体/螺旋/环面
-          vec3 shapeColor;
-          if (uShapeType < 0.5) shapeColor = vec3(0.816, 0.376, 0.502);      // 爱心
-          else if (uShapeType < 1.5) shapeColor = vec3(0.376, 0.627, 0.816);  // 球体
-          else if (uShapeType < 2.5) shapeColor = vec3(0.816, 0.627, 0.314);  // 螺旋
-          else shapeColor = vec3(0.565, 0.376, 0.816);                         // 环面
+          // 形态塑形配色方案：每个形态双色渐变（中心色 → 边缘色）
+          vec3 shapeCore, shapeEdge;
+          if (uShapeType < 0.5) {
+            shapeCore = vec3(0.753, 0.251, 0.376);  // 爱心：深红
+            shapeEdge = vec3(0.941, 0.627, 0.690);  // 爱心：柔粉
+          } else if (uShapeType < 1.5) {
+            shapeCore = vec3(0.188, 0.314, 0.627);  // 球体：深蓝
+            shapeEdge = vec3(0.502, 0.878, 1.000);  // 球体：冰青
+          } else if (uShapeType < 2.5) {
+            shapeCore = vec3(0.753, 0.502, 0.125);  // 螺旋：金褐
+            shapeEdge = vec3(1.000, 0.800, 0.439);  // 螺旋：亮橙
+          } else {
+            shapeCore = vec3(0.376, 0.188, 0.565);  // 环面：深紫
+            shapeEdge = vec3(0.816, 0.376, 0.753);  // 环面：玫红
+          }
+          float shapeRadius = 2.6;
+          float shapeGrad = clamp(length(vWorldPos - uBlackHolePos) / shapeRadius, 0.0, 1.0);
+          vec3 shapeColor = mix(shapeCore, shapeEdge, shapeGrad);
+
           vec3 baseColor = mix(uColor, shapeColor, uShapeStrength);
 
           vec3 coolColor = baseColor * 0.72;
