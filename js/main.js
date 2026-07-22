@@ -353,6 +353,17 @@ function animate() {
   }
   STATE.shapeStrength = lerpStrength(STATE.shapeStrength, STATE.targetShapeStrength, dt);
 
+  // 手远近驱动相机变焦：手靠近摄像头推进，手远离拉远
+  let targetCamZ = 5.0;
+  if (STATE.handPresent) {
+    const depths = [];
+    if (STATE.handDepth !== undefined) depths.push(STATE.handDepth);
+    if (STATE.hand2Present && STATE.hand2Depth !== undefined) depths.push(STATE.hand2Depth);
+    const avgDepth = depths.reduce((a, b) => a + b, 0) / depths.length;
+    targetCamZ = THREE.MathUtils.mapLinear(avgDepth, -1.0, 1.0, 7.5, 2.8);
+  }
+  camera.position.z += (targetCamZ - camera.position.z) * Math.min(2.0 * dt, 1.0);
+
   // 极缓慢的相机漂移，增强空间纵深感
   camera.position.x = Math.sin(t * 0.08) * 0.15;
   camera.position.y = Math.cos(t * 0.06) * 0.12;
