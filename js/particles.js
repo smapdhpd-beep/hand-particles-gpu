@@ -90,8 +90,8 @@ export class GPUParticleSystem {
         // 无手时 handInfluence 为 0，避免默认状态粒子被拉向画面中心
         float handInfluence = uHandActive * smoothstep(8.0, 2.0, dist);
 
-        // 手远近影响全局速度感：远慢近快
-        float depthScale = 0.35 + 0.85 * clamp(uHandDepth, -1.0, 1.0);
+        // 手远近影响全局速度感：远慢近快，差异更加明显
+        float depthScale = 0.25 + 1.25 * clamp((uHandDepth + 1.0) * 0.5, 0.0, 1.0);
 
         if (uMode < 0.5) {
           // 0: 引力奇点
@@ -196,6 +196,7 @@ export class GPUParticleSystem {
         uTime: { value: 0 },
         uBlackHolePos: { value: new THREE.Vector3() },
         uBlackHoleStrength: { value: 0 },
+        uHandDepth: { value: 0 },
       },
       vertexShader: `
         uniform sampler2D texturePosition;
@@ -220,6 +221,7 @@ export class GPUParticleSystem {
         uniform vec3 uColor;
         uniform vec3 uBlackHolePos;
         uniform float uBlackHoleStrength;
+        uniform float uHandDepth;
         varying vec3 vWorldPos;
         varying float vDepth;
         varying float vSpeed;
@@ -229,9 +231,11 @@ export class GPUParticleSystem {
           if (d > 0.5) discard;
 
           float holeDist = length(vWorldPos - uBlackHolePos);
+          float depthFactor = 0.5 + 0.5 * clamp((uHandDepth + 1.0) * 0.5, 0.0, 1.0);
 
-          // 吸积盘热量：仅在内侧小范围发热，过渡陡峭避免大亮斑
-          float heat = uBlackHoleStrength * smoothstep(0.9, 0.05, holeDist);
+          // 吸积盘热量：手近时加热半径更大，视觉差异更明显
+          float heatRadius = 0.05 + depthFactor * 0.22;
+          float heat = uBlackHoleStrength * smoothstep(heatRadius * 2.0, heatRadius, holeDist);
           heat = clamp(heat, 0.0, 1.0);
 
           // 颜色从冷尘埃到热吸积盘渐变
@@ -335,5 +339,6 @@ export class GPUParticleSystem {
     this.points.material.uniforms.uTime.value = time;
     this.points.material.uniforms.uBlackHolePos.value.set(handX, handY, handZ);
     this.points.material.uniforms.uBlackHoleStrength.value = blackHoleStrength;
+    this.points.material.uniforms.uHandDepth.value = handDepth;
   }
 }

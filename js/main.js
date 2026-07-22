@@ -70,12 +70,10 @@ const handTracker = new HandTracker((result) => {
 
 const audio = new AudioEngine();
 
-// 首次手势/点击启动音频（浏览器自动播放策略要求用户交互）
+// 音频仅在手势识别后启动（浏览器自动播放策略允许以摄像头授权作为交互）
 function ensureAudio() {
-  if (!audio.started) audio.start();
+  if (STATE.handPresent && !audio.started) audio.start();
 }
-window.addEventListener('pointerdown', ensureAudio, { once: true });
-window.addEventListener('keydown', ensureAudio, { once: true });
 
 const muteBtn = document.getElementById('mute-btn');
 if (muteBtn) {
@@ -116,7 +114,12 @@ function parseGesture(result, state) {
   const idxMcp = lm[5];
   state.handX = (1.0 - idxMcp.x - 0.5) * 5.0;
   state.handY = -(idxMcp.y - 0.5) * 2.8;
-  state.handDepth = THREE.MathUtils.clamp(-((lm[5].z + lm[9].z + lm[13].z) / 3) * 4.0, -1, 1);
+
+  // 深度：综合 MediaPipe z 与手掌 2D 大小（近大远小），提高可靠性
+  const zDepth = -((lm[5].z + lm[9].z + lm[13].z) / 3) * 4.0;
+  const palmSize2d = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
+  const sizeDepth = (palmSize2d - 0.06) / 0.13 - 1.0;
+  state.handDepth = THREE.MathUtils.clamp((zDepth + sizeDepth) * 0.5, -1, 1);
 
   // 张开度
   const tips = [4, 8, 12, 16, 20];

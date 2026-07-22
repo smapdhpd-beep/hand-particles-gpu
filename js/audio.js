@@ -211,7 +211,13 @@ export class AudioEngine {
 
     const bh = state.blackHoleStrength || 0;
     const depth = clamp(state.handDepth || 0, -1, 1);
-    const depthScale = 0.6 + 0.4 * (depth + 1) * 0.5; // 0.6 ~ 1.0
+    // 深度对速度和音效的缩放：远手 0.25x，近手 1.5x（6 倍差异，更明显）
+    const depthScale = 0.25 + 1.25 * clamp((depth + 1.0) * 0.5, 0.0, 1.0);
+
+    // 无手且黑洞已消散时整体静音；有手时恢复
+    const active = state.handPresent || bh > 0.05;
+    const masterTarget = (!active || this.muted) ? 0.0 : 0.55;
+    this.master.gain.setTargetAtTime(masterTarget, t, 0.15);
 
     // 空间声像跟随手/黑洞位置
     if (this.panner) {
@@ -220,9 +226,9 @@ export class AudioEngine {
       this.panner.positionZ.setTargetAtTime(state.handDepth || 0, t, 0.05);
     }
 
-    // 环境音：手出现时稍微变亮
+    // 环境音：仅在有手时出现
     if (this.ambient) {
-      const ambientVol = 0.035 + (state.handPresent ? 0.015 : 0);
+      const ambientVol = active ? 0.05 : 0.0;
       this.ambient.gain.gain.setTargetAtTime(ambientVol, t, 0.2);
     }
 
